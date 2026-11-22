@@ -726,6 +726,17 @@ config TAB_S4_V59_WORKINGSET
 	  Linux 5.9 workingset model while retaining this kernel's original
 	  per-zone accounting and memory-cgroup interfaces.
 
+config TAB_S4_V59_RECLAIM_COST
+	bool "Experimental Linux 5.9 refault-aware reclaim cost balancing"
+	depends on SWAP && TAB_S4_V59_WORKINGSET
+	default n
+	help
+	  Adapt Linux 5.9's relative LRU cost accounting for this
+	  kernel's per-zone / per-memcg lruvec implementation.
+	  Track pageouts and refaults of previously active file pages,
+	  and balance anonymous/file reclaim using measured costs.
+	  Legacy scan balancing remains available when disabled.
+
 config BALANCE_ANON_FILE_RECLAIM
 	bool "During reclaim treat anon and file backed pages equally"
 	depends on SWAP
