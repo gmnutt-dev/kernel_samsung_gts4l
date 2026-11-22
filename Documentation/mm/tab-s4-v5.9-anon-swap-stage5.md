@@ -14,7 +14,7 @@ Prior 2026-11-22 memory-pressure captures consistently show exhausted 1.66 GiB l
 | --- | --- | --- |
 | Anonymous refault tracking | Swap-cache XArray value shadows and lruvec nonresident age | Fixed-size per-swap-slot encoded shadows, old zone nonresident-age clock |
 | Anonymous refault decision | `workingset_refault()` includes file and anon LRUs and distinct activation events | Separate eligibility for swap-backed page, active LRU insertion, distinct `/proc/vmstat` counters |
-| Reclaim cost | `lru_note_cost_page()` on restored active pages | Reuses Stage 2 lruvec cost accounting; swap-in pages not yet memcg-charged can initially affect root stats |
+| Reclaim cost | `lru_note_cost_page()` on restored active pages | Reuses Stage 2 lruvec cost accounting; resolves the swap-cgroup owner ID under RCU before the new page is charged |
 | Active LRU aging | Refault signals and inactive-list targets | Stage 3 file and new Stage 5 anon signals per zone/memcg reclaim_stat |
 | Retry | `skipped_deactivate` and `force_deactivate` when reclaim cannot free pages | One bounded retry, disabled when ZRAM has too few free slots to avoid Stage 3 regression |
 | Scheduling | Explicit `cond_resched()` in reclaim scan loop | Gated Stage 5 scheduling point |
@@ -30,7 +30,7 @@ This is an intentionally constrained backport. It is **not a full upstream 5.9 X
 4. In `__read_swap_cache_async()`, on successful new swap-cache insertion the stored shadow is consumed **once**, evaluated by `workingset_refault()`, and accepted pages are placed on the active anonymous LRU using `lru_cache_add()`. Ordinary swap-ins still use `lru_cache_add_anon()`.
 5. Anonymous and file refaults have different residency windows (from v5.9's model) and new counters are separately exposed as `workingset_refault_anon`, `workingset_activate_anon`, `workingset_restore_anon` in `/proc/vmstat`. Existing `workingset_refault` remains file-only for comparison with Stage 2/3.
 
-**Safety limitation:** Unlike v5.9's fully hierarchical memcg lruvec, this legacy kernel has zone-based shadow timestamps and can account a newly created swap-cache page to the root lruvec before memory-cgroup charging completes. Any resulting per-memcg feedback imprecision should be measured before treating this as equal to the original upstream behaviour.
+**Safety limitation:** Unlike v5.9's fully hierarchical memcg lruvec, this legacy kernel has zone-based shadow timestamps. Refault activation and reclaim-cost feedback use the current swap-cgroup owner ID before the incoming page is charged, falling back to the page/root lruvec when swap ownership is unavailable. Ancestor-propagated nonresident ages remain absent, so this is not identical to upstream's full hierarchy.
 
 ## Reclaim and watermarks
 
