@@ -746,7 +746,7 @@ config TAB_S4_V59_CACHE_TRIM
 
 config TAB_S4_V59_ANON_WORKINGSET
 	bool "Tab S4 Linux 5.9 anonymous swap refault tracking"
-	depends on SWAP && TAB_S4_V59_WORKINGSET && TAB_S4_V59_RECLAIM_COST
+	depends on SWAP && TAB_S4_V59_REFAULT_DEACTIVATE && TAB_S4_V59_RECLAIM_COST
 	default n
 	help
 	  Maintain one nonresident age shadow per in-use swap slot and
