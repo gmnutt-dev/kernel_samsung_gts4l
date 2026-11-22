@@ -299,6 +299,9 @@ void workingset_refault(struct page *page, void *shadow)
 	if (workingset) {
 		SetPageWorkingset(page);
 		inc_zone_state(zone, WORKINGSET_RESTORE);
+		/* Refault of a previously active page represents real cache cost. */
+		if (IS_ENABLED(CONFIG_TAB_S4_V59_RECLAIM_COST))
+			lru_note_cost_page(page);
 	}
 }
 
