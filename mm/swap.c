@@ -562,7 +562,7 @@ void workingset_note_file_refault(struct page *page)
 	struct zone *zone = page_zone(page);
 	struct lruvec *lruvec;
 
-	if (WARN_ON_ONCE(PageSwapBacked(page)))
+	if (PageSwapBacked(page))
 		return;
 
 	spin_lock_irq(&zone->lru_lock);
