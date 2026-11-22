@@ -257,6 +257,16 @@ struct swap_info_struct {
 void *workingset_eviction(struct address_space *mapping, struct page *page);
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
+
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_COST
+/* lru_note_cost() requires the containing zone's lru_lock. */
+void lru_note_cost(struct lruvec *lruvec, bool file, unsigned long nr_pages);
+void lru_note_cost_page(struct page *page);
+#else
+static inline void lru_note_cost(struct lruvec *lruvec, bool file,
+				 unsigned long nr_pages) { }
+static inline void lru_note_cost_page(struct page *page) { }
+#endif
 extern struct list_lru workingset_shadow_nodes;
 
 static inline unsigned int workingset_node_pages(struct radix_tree_node *node)
