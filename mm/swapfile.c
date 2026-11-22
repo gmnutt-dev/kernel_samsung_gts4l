@@ -811,13 +811,32 @@ out:
  */
 void tab_s4_swap_shadow_store(swp_entry_t entry, unsigned long shadow)
 {
-	struct swap_info_struct *p = swap_info_get(entry);
+	struct swap_info_struct *p;
+	unsigned long *slots;
+	unsigned long offset;
 
+	/*
+	 * Called with the swap-cache mapping tree_lock held. Do NOT acquire
+	 * swap_info->lock here: free_swap_and_cache() takes that lock before
+	 * finding an entry in the radix tree (ABBA deadlock).
+	 *
+	 * The still-present swap-cache reference keeps this swap slot in use
+	 * until __remove_mapping() drops tree_lock and calls swapcache_free().
+	 * Consequently neither swapoff nor slot recycling can release the
+	 * shadow table during this store.
+	 */
+	if (!entry.val || swp_type(entry) >= MAX_SWAPFILES)
+		return;
+
+	p = READ_ONCE(swap_info[swp_type(entry)]);
 	if (!p)
 		return;
-	if (p->tab_s4_anon_shadow)
-		p->tab_s4_anon_shadow[swp_offset(entry)] = shadow;
-	spin_unlock(&p->lock);
+	offset = swp_offset(entry);
+	if (offset >= READ_ONCE(p->max))
+		return;
+	slots = READ_ONCE(p->tab_s4_anon_shadow);
+	if (slots)
+		WRITE_ONCE(slots[offset], shadow);
 }
 
 unsigned long tab_s4_swap_shadow_take(swp_entry_t entry)
