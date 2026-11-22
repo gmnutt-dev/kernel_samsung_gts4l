@@ -744,6 +744,34 @@ config TAB_S4_V59_CACHE_TRIM
 	  cache remains and no new file workingset activation was
 	  observed in the previous reclaim cycle.
 
+config TAB_S4_V59_ANON_WORKINGSET
+	bool "Tab S4 Linux 5.9 anonymous swap refault tracking"
+	depends on SWAP && TAB_S4_V59_WORKINGSET && TAB_S4_V59_RECLAIM_COST
+	default n
+	help
+	  Maintain one nonresident age shadow per in-use swap slot and
+	  detect anonymous page refaults when those pages return from swap.
+	  Adapt upstream Linux 5.9 workingset logic without importing XArray
+	  into the 4.4 radix-tree swap cache. Shadows are cleared on free.
+
+config TAB_S4_V59_RECLAIM_RETRY
+	bool "Tab S4 Linux 5.9 reclaim fairness and final deactivation retry"
+	depends on TAB_S4_V59_WORKINGSET
+	default n
+	help
+	  Yield in the reclaim scan loop and perform one bounded retry
+	  when the first reclaim pass skipped active-page deactivation.
+	  Preserve protection of active file cache when swap is exhausted.
+
+config TAB_S4_V59_WATERMARK_SCALE
+	bool "Tab S4 Linux 5.9 scaled background reclaim watermarks"
+	depends on MMU
+	default n
+	help
+	  Scale the gap between low and high watermarks with zone size,
+	  while retaining the vendor extra_free_kbytes adjustment.
+	  Expose vm.watermark_scale_factor at runtime.
+
 config TAB_S4_V59_RECLAIM_COST
 	bool "Experimental Linux 5.9 refault-aware reclaim cost balancing"
 	depends on SWAP && TAB_S4_V59_WORKINGSET
