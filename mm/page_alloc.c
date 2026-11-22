@@ -280,6 +280,15 @@ int user_min_free_kbytes = -1;
  */
 int extra_free_kbytes = 0;
 
+#ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
+/*
+ * Linux 5.9 watermark_scale_factor adapted to retain this vendor
+ * kernel's extra_free_kbytes watermarks. Default 50 means 0.5% of
+ * managed memory between background reclaim thresholds.
+ */
+int watermark_scale_factor = 50;
+#endif
+
 static unsigned long __meminitdata nr_kernel_pages;
 static unsigned long __meminitdata nr_all_pages;
 static unsigned long __meminitdata dma_reserve;
@@ -6394,10 +6403,24 @@ static void __setup_per_zone_wmarks(void)
 			zone->watermark[WMARK_MIN] = min;
 		}
 
+#ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
+		{
+			u64 gap = (u64)zone->managed_pages *
+				  watermark_scale_factor;
+
+			do_div(gap, 10000);
+			gap = max_t(u64, min >> 2, gap);
+			zone->watermark[WMARK_LOW] =
+				min_wmark_pages(zone) + low + gap;
+			zone->watermark[WMARK_HIGH] =
+				min_wmark_pages(zone) + low + 2 * gap;
+		}
+#else
 		zone->watermark[WMARK_LOW]  = min_wmark_pages(zone) +
 					low + (min >> 2);
 		zone->watermark[WMARK_HIGH] = min_wmark_pages(zone) +
 					low + (min >> 1);
+#endif
 
 		__mod_zone_page_state(zone, NR_ALLOC_BATCH,
 			high_wmark_pages(zone) - low_wmark_pages(zone) -
@@ -6526,6 +6549,19 @@ postcore_initcall(init_per_zone_wmark_min)
  *	that we can call two helper functions whenever min_free_kbytes
  *	or extra_free_kbytes changes.
  */
+#ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
+int watermark_scale_factor_sysctl_handler(struct ctl_table *table, int write,
+					  void __user *buffer, size_t *length,
+					  loff_t *ppos)
+{
+	int rc = proc_dointvec_minmax(table, write, buffer, length, ppos);
+
+	if (!rc && write)
+		setup_per_zone_wmarks();
+	return rc;
+}
+#endif
+
 int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 	void __user *buffer, size_t *length, loff_t *ppos)
 {
