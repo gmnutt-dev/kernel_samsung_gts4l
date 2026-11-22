@@ -106,6 +106,13 @@ struct scan_control {
 	/* One of the zones is ready for compaction */
 	unsigned int compaction_ready:1;
 
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+	/* Per-lruvec file workingset transition observed this reclaim pass. */
+	unsigned int deactivate_file:1;
+	unsigned int cache_trim_mode:1;
+	unsigned long file_refault_snapshot;
+#endif
+
 	/* Incremented by the number of inactive pages that were scanned */
 	unsigned long nr_scanned;
 
@@ -2174,7 +2181,13 @@ static unsigned long shrink_list(enum lru_list lru, unsigned long nr_to_scan,
 				 struct lruvec *lruvec, struct scan_control *sc)
 {
 	if (is_active_lru(lru)) {
-		if (inactive_list_is_low(lruvec, lru))
+		bool may_deactivate = inactive_list_is_low(lruvec, lru);
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+		/* Preserve the existing anonymous LRU ratio policy. */
+		if (is_file_lru(lru))
+			may_deactivate = sc->deactivate_file;
+#endif
+		if (may_deactivate)
 			shrink_active_list(nr_to_scan, lruvec, sc, lru);
 		return 0;
 	}
@@ -2363,6 +2376,28 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	if (!global_reclaim(sc))
 		force_scan = true;
 
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+	/*
+	 * Snapshot accepted file-cache refaults before scanning. Consume
+	 * only this snapshot once the reclaim pass completes; refaults
+	 * arriving during reclaim must remain visible on the next pass.
+	 * LRU state and its refault counter share zone->lru_lock.
+	 */
+	spin_lock_irq(&zone->lru_lock);
+	sc->file_refault_snapshot =
+		reclaim_stat->file_refault_activations;
+	sc->deactivate_file =
+		(sc->file_refault_snapshot != reclaim_stat->file_refault_seen);
+	spin_unlock_irq(&zone->lru_lock);
+
+	if (inactive_file_is_low(lruvec))
+		sc->deactivate_file = 1;
+	sc->cache_trim_mode =
+		IS_ENABLED(CONFIG_TAB_S4_V59_CACHE_TRIM) &&
+		!sc->deactivate_file &&
+		!!(get_lru_size(lruvec, LRU_INACTIVE_FILE) >> sc->priority);
+#endif
+
 	/* If we have no swap space, do not bother scanning anon pages. */
 	if (!sc->may_swap || (get_nr_swap_pages() <= 0)) {
 		scan_balance = SCAN_FILE;
@@ -2418,6 +2453,18 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
+
+#ifdef CONFIG_TAB_S4_V59_CACHE_TRIM
+	/*
+	 * With no new refault activations and a replenished inactive
+	 * file list, trim single-use file cache before anonymous memory.
+	 * A new file workingset immediately cancels this mode.
+	 */
+	if (sc->cache_trim_mode) {
+		scan_balance = SCAN_FILE;
+		goto out;
+	}
+#endif
 
 	/*
 	 * If there is enough inactive page cache, i.e. if the size of the
@@ -2678,6 +2725,18 @@ static void shrink_lruvec(struct lruvec *lruvec, int swappiness,
 	}
 	blk_finish_plug(&plug);
 	sc->nr_reclaimed += nr_reclaimed;
+
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+	/*
+	 * New activations made during this pass have counter values
+	 * larger than the snapshot, and will trigger deactivation
+	 * on the next reclaim round.
+	 */
+	spin_lock_irq(&lruvec_zone(lruvec)->lru_lock);
+	lruvec->reclaim_stat.file_refault_seen =
+		sc->file_refault_snapshot;
+	spin_unlock_irq(&lruvec_zone(lruvec)->lru_lock);
+#endif
 
 	/*
 	 * Even if we did not try to evict anon pages at all, we want to
