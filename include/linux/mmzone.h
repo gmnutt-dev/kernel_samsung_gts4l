@@ -225,6 +225,11 @@ struct zone_reclaim_stat {
 	 */
 	unsigned long		recent_rotated[2];
 	unsigned long		recent_scanned[2];
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_COST
+	/* Cost of reclaiming each LRU, updated under zone->lru_lock. */
+	unsigned long		anon_cost;
+	unsigned long		file_cost;
+#endif
 };
 
 struct lruvec {

@@ -713,6 +713,69 @@ config MAX_DIRTY_THRESH_PAGES
 	  It is only effective when dirty_ratio is used.
 	  (Setting dirty_bytes disables this option.)
 
+# Initial, device-specific backport of the Linux 5.9 workingset model.
+# This does not enable the separate 5.9 reclaim-cost scan balancer.
+config TAB_S4_V59_WORKINGSET
+	bool "Experimental file/anon workingset competition for Tab S4"
+	depends on SWAP
+	default n
+	help
+	  Permit refaulting file pages to compete with anonymous memory when
+	  swap capacity remains. Include anonymous activations and active-list
+	  rotations in the nonresident aging clock. This approximates the
+	  Linux 5.9 workingset model while retaining this kernel's original
+	  per-zone accounting and memory-cgroup interfaces.
+
+config TAB_S4_V59_RECLAIM_COST
+	bool "Experimental Linux 5.9 refault-aware reclaim cost balancing"
+	depends on SWAP && TAB_S4_V59_WORKINGSET
+	default n
+	help
+	  Adapt Linux 5.9's relative LRU cost accounting for this
+	  kernel's per-zone / per-memcg lruvec implementation.
+	  Track pageouts and refaults of previously active file pages,
+	  and balance anonymous/file reclaim using measured costs.
+	  Legacy scan balancing remains available when disabled.
+
+# Linux 7.3.5 legacy-LRU mechanisms adapted to the 4.4 per-zone lruvec.
+# All are independently disableable and require the earlier isolated
+# workingset/cost foundations, not Stage 3's file deactivation/cache trim.
+config TAB_S4_V73_REFAULT_AGE
+	bool "Age nonresident clock when a file refault is activated"
+	depends on TAB_S4_V59_WORKINGSET
+	default n
+	help
+	  Match the post-refault aging step of Linux 7.3.5 without changing
+	  the vendor kernel's radix-tree shadow entry format.
+
+config TAB_S4_V73_COST_SIGNALS
+	bool "Weight I/O and rotation separately in reclaim costs"
+	depends on TAB_S4_V59_RECLAIM_COST
+	default n
+	help
+	  Account actual pageouts and restored file workingset pages with
+	  SWAP_CLUSTER_MAX weight, and active-list rotations with unit weight.
+	  This is a 4.4-compatible approximation of Linux 7.3.5's
+	  rolling I/O-versus-rotation reclaim cost accounting.
+
+config TAB_S4_V73_FILE_CACHE_GUARD
+	bool "Check anonymous reclaim eligibility before cache-trap forcing"
+	depends on TAB_S4_V59_RECLAIM_COST
+	default n
+	help
+	  Only force anonymous reclaim for a tiny file cache if the inactive
+	  anonymous LRU has eligible pages and at least one swap cluster
+	  remains. Otherwise keep normal scan balancing. Approximates the
+	  modern file_is_tiny eligibility test in this legacy per-zone VM.
+
+config TAB_S4_V73_RECLAIM_YIELD
+	bool "Yield between complete reclaim scan batches"
+	depends on TAB_S4_V59_RECLAIM_COST
+	default n
+	help
+	  Use a conditional scheduling point between SWAP_CLUSTER_MAX LRU
+	  batches. It does not change page eligibility or scan target counts.
+
 config BALANCE_ANON_FILE_RECLAIM
 	bool "During reclaim treat anon and file backed pages equally"
 	depends on SWAP

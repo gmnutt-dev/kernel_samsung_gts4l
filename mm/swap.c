@@ -490,6 +490,68 @@ void rotate_reclaimable_page(struct page *page)
 	}
 }
 
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_COST
+/*
+ * Adapted from Linux 5.9's relative reclaim-cost accounting.
+ *
+ * Callers hold zone->lru_lock. The cost is per zone/memcg lruvec,
+ * matching the locking and LRU dimensions of this 4.4-derived tree.
+ */
+void lru_note_cost(struct lruvec *lruvec, bool file,
+		   unsigned long nr_pages)
+{
+	struct zone_reclaim_stat *stat = &lruvec->reclaim_stat;
+	struct zone *zone = lruvec_zone(lruvec);
+	unsigned long lru_size;
+	int lru;
+
+	if (file)
+		stat->file_cost += nr_pages;
+	else
+		stat->anon_cost += nr_pages;
+
+	lru_size = 0;
+	if (!mem_cgroup_disabled()) {
+		for (lru = LRU_INACTIVE_ANON; lru <= LRU_ACTIVE_FILE; lru++)
+			lru_size += mem_cgroup_get_lru_size(lruvec, lru);
+	} else {
+		for (lru = NR_INACTIVE_ANON; lru <= NR_ACTIVE_FILE; lru++)
+			lru_size += zone_page_state(zone, lru);
+	}
+
+	/*
+	 * Decay once the observed costs occupy one quarter of the LRU.
+	 * Check each counter first so the addition cannot overflow.
+	 */
+	if (stat->anon_cost > lru_size / 4 ||
+	    stat->file_cost > lru_size / 4 ||
+	    stat->anon_cost + stat->file_cost > lru_size / 4) {
+		stat->anon_cost /= 2;
+		stat->file_cost /= 2;
+	}
+}
+
+/*
+ * Restored file pages report the actual refault cost. This is called
+ * only after the page cache insertion and memcg charge have completed.
+ */
+void lru_note_cost_page(struct page *page)
+{
+	struct zone *zone = page_zone(page);
+	struct lruvec *lruvec;
+	unsigned long nr_cost = hpage_nr_pages(page);
+
+	/* Linux 7.3.5 weights refault I/O above in-memory rotations. */
+	if (IS_ENABLED(CONFIG_TAB_S4_V73_COST_SIGNALS))
+		nr_cost *= SWAP_CLUSTER_MAX;
+
+	spin_lock_irq(&zone->lru_lock);
+	lruvec = mem_cgroup_page_lruvec(page, zone);
+	lru_note_cost(lruvec, page_is_file_cache(page), nr_cost);
+	spin_unlock_irq(&zone->lru_lock);
+}
+#endif
+
 static void update_page_reclaim_stat(struct lruvec *lruvec,
 				     int file, int rotated)
 {
@@ -619,7 +681,9 @@ void mark_page_accessed(struct page *page)
 		else
 			__lru_cache_activate_page(page);
 		ClearPageReferenced(page);
-		if (page_is_file_cache(page))
+		/* Linux 5.9-style aging also accounts for anon LRU activity. */
+		if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) ||
+		    page_is_file_cache(page))
 			workingset_activation(page);
 	} else if (!PageReferenced(page)) {
 		SetPageReferenced(page);

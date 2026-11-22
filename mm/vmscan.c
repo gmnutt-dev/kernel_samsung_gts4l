@@ -949,6 +949,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				      unsigned long *ret_nr_congested,
 				      unsigned long *ret_nr_writeback,
 				      unsigned long *ret_nr_immediate,
+				      unsigned long *ret_nr_pageout,
 				      bool force_reclaim)
 {
 	LIST_HEAD(ret_pages);
@@ -960,6 +961,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned long nr_reclaimed = 0;
 	unsigned long nr_writeback = 0;
 	unsigned long nr_immediate = 0;
+	unsigned long nr_pageout = 0;
 
 	cond_resched();
 
@@ -1179,6 +1181,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			case PAGE_ACTIVATE:
 				goto activate_locked;
 			case PAGE_SUCCESS:
+				/* Count newly issued IO, as in Linux 5.9. */
+				nr_pageout++;
 				if (PageWriteback(page))
 					goto keep;
 				if (PageDirty(page))
@@ -1301,6 +1305,7 @@ keep:
 	*ret_nr_unqueued_dirty += nr_unqueued_dirty;
 	*ret_nr_writeback += nr_writeback;
 	*ret_nr_immediate += nr_immediate;
+	*ret_nr_pageout += nr_pageout;
 	return nr_reclaimed;
 }
 
@@ -1314,7 +1319,9 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 		/* Doesn't allow to write out dirty page */
 		.may_writepage = 0,
 	};
-	unsigned long ret, dummy1, dummy2, dummy3, dummy4, dummy5;
+	unsigned long ret;
+	unsigned long dummy1 = 0, dummy2 = 0, dummy3 = 0;
+	unsigned long dummy4 = 0, dummy5 = 0, dummy6 = 0;
 	struct page *page, *next;
 	LIST_HEAD(clean_pages);
 
@@ -1328,7 +1335,8 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 
 	ret = shrink_page_list(&clean_pages, zone, &sc,
 			TTU_UNMAP|TTU_IGNORE_ACCESS,
-			&dummy1, &dummy2, &dummy3, &dummy4, &dummy5, true);
+			&dummy1, &dummy2, &dummy3, &dummy4, &dummy5,
+			&dummy6, true);
 	list_splice(&clean_pages, page_list);
 	mod_zone_page_state(zone, NR_ISOLATED_FILE, -ret);
 	return ret;
@@ -1397,14 +1405,16 @@ unsigned long reclaim_pages_from_list(struct list_head *page_list,
 
 	unsigned long nr_reclaimed;
 	struct page *page;
-	unsigned long dummy1, dummy2, dummy3, dummy4, dummy5;
+	unsigned long dummy1 = 0, dummy2 = 0, dummy3 = 0;
+	unsigned long dummy4 = 0, dummy5 = 0, dummy6 = 0;
 
 	list_for_each_entry(page, page_list, lru)
 		ClearPageActive(page);
 
 	nr_reclaimed = shrink_page_list(page_list, NULL, &sc,
 			TTU_UNMAP|TTU_IGNORE_ACCESS,
-			&dummy1, &dummy2, &dummy3, &dummy4, &dummy5, true);
+			&dummy1, &dummy2, &dummy3, &dummy4, &dummy5,
+			&dummy6, true);
 
 	while (!list_empty(page_list)) {
 		page = lru_to_page(page_list);
@@ -1728,6 +1738,10 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 				spin_lock_irq(&zone->lru_lock);
 			} else
 				list_add(&page->lru, &pages_to_free);
+		} else if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
+			   is_active_lru(lru)) {
+			/* Advance nonresident age as active file/anon pages rotate. */
+			workingset_activation(page);
 		}
 	}
 
@@ -1769,6 +1783,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	unsigned long nr_unqueued_dirty = 0;
 	unsigned long nr_writeback = 0;
 	unsigned long nr_immediate = 0;
+	unsigned long nr_pageout = 0;
 	isolate_mode_t isolate_mode = 0;
 	int file = is_file_lru(lru);
 	int safe = 0;
@@ -1821,12 +1836,24 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	nr_reclaimed = shrink_page_list(&page_list, zone, sc, ttu,
 				&nr_dirty, &nr_unqueued_dirty, &nr_congested,
-				&nr_writeback, &nr_immediate,
+				&nr_writeback, &nr_immediate, &nr_pageout,
 				force_reclaim);
 
 	spin_lock_irq(&zone->lru_lock);
 
 	reclaim_stat->recent_scanned[file] += nr_taken;
+	if (nr_pageout) {
+		/*
+		 * Pageouts are actual I/O events; 7.3.5 charges those
+		 * more heavily than referenced-page rotations.
+		 * nr_pageout is bounded by this isolated LRU batch.
+		 */
+		unsigned long cost = nr_pageout;
+
+		if (IS_ENABLED(CONFIG_TAB_S4_V73_COST_SIGNALS))
+			cost *= SWAP_CLUSTER_MAX;
+		lru_note_cost(lruvec, file, cost);
+	}
 
 	if (global_reclaim(sc)) {
 		if (current_is_kswapd())
@@ -1963,6 +1990,10 @@ static void move_active_pages_to_lru(struct lruvec *lruvec,
 				spin_lock_irq(&zone->lru_lock);
 			} else
 				list_add(&page->lru, pages_to_free);
+		} else if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
+			   is_active_lru(lru)) {
+			/* Mirror the active-page LRU age accounting of Linux 5.9. */
+			workingset_activation(page);
 		}
 	}
 	__mod_zone_page_state(zone, NR_LRU_BASE + lru, pgmoved);
@@ -2067,6 +2098,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	 * get_scan_count.
 	 */
 	reclaim_stat->recent_rotated[file] += nr_rotated;
+	/* A referenced rotation costs less than an I/O refault or pageout. */
+	if (IS_ENABLED(CONFIG_TAB_S4_V73_COST_SIGNALS) && nr_rotated)
+		lru_note_cost(lruvec, file, nr_rotated);
 
 	move_active_pages_to_lru(lruvec, &l_active, &l_hold, lru);
 	move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
@@ -2388,8 +2422,20 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 			   zone_page_state(zone, NR_INACTIVE_FILE);
 
 		if (unlikely(zonefile + zonefree <= high_wmark_pages(zone))) {
-			scan_balance = SCAN_ANON;
-			goto out;
+			/*
+			 * Linux 7.3.5's file_is_tiny path also checks whether
+			 * cold anonymous pages can actually be reclaimed.
+			 * Do not force anonymous scans when the remaining swap
+			 * capacity cannot accommodate even one cluster.
+			 */
+			if (!IS_ENABLED(CONFIG_TAB_S4_V73_FILE_CACHE_GUARD) ||
+			    (get_nr_swap_pages() > SWAP_CLUSTER_MAX &&
+			     !inactive_anon_is_low(lruvec) &&
+			     (get_lru_size(lruvec, LRU_INACTIVE_ANON) >>
+			      sc->priority))) {
+				scan_balance = SCAN_ANON;
+				goto out;
+			}
 		}
 	}
 
@@ -2407,7 +2453,8 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	 * lruvec even if it has plenty of old anonymous pages unless the
 	 * system is under heavy pressure.
 	 */
-	if (!IS_ENABLED(CONFIG_BALANCE_ANON_FILE_RECLAIM) &&
+	if (!IS_ENABLED(CONFIG_TAB_S4_V59_RECLAIM_COST) &&
+	    !IS_ENABLED(CONFIG_BALANCE_ANON_FILE_RECLAIM) &&
 			!inactive_file_is_low(lruvec) &&
 			get_lru_size(lruvec, LRU_INACTIVE_FILE) >> sc->priority) {
 		scan_balance = SCAN_FILE;
@@ -2422,6 +2469,37 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	 */
 	anon_prio = swappiness;
 	file_prio = 200 - anon_prio;
+
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_COST
+	{
+		unsigned long anon_cost, file_cost, total_cost;
+
+		/*
+		 * Linux 5.9 relative LRU reclaim costs, adapted to the
+		 * old per-zone/per-memcg reclaim-stat lock domain.
+		 * This avoids the old scanned/rotated ratio feedback loop.
+		 */
+		spin_lock_irq(&zone->lru_lock);
+		anon_cost = reclaim_stat->anon_cost;
+		file_cost = reclaim_stat->file_cost;
+		spin_unlock_irq(&zone->lru_lock);
+
+		total_cost = anon_cost + file_cost;
+		anon_cost += total_cost;
+		file_cost += total_cost;
+		total_cost = anon_cost + file_cost;
+
+		ap = anon_prio * (total_cost + 1);
+		ap /= anon_cost + 1;
+		fp = file_prio * (total_cost + 1);
+		fp /= file_cost + 1;
+
+		fraction[0] = ap;
+		fraction[1] = fp;
+		denominator = ap + fp + 1;
+		goto out;
+	}
+#endif
 
 	/*
 	 * OK, so we have swap space and a fair amount of page cache
@@ -2568,6 +2646,10 @@ static void shrink_lruvec(struct lruvec *lruvec, int swappiness,
 							    lruvec, sc);
 			}
 		}
+
+		/* Match modern reclaim's batch-level scheduling opportunity. */
+		if (IS_ENABLED(CONFIG_TAB_S4_V73_RECLAIM_YIELD))
+			cond_resched();
 
 		if (nr_reclaimed < nr_to_reclaim || scan_adjusted)
 			continue;
