@@ -111,6 +111,11 @@ extern unsigned int core_pipe_limit;
 #endif
 extern int pid_max;
 extern int extra_free_kbytes;
+#ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
+extern int watermark_scale_factor;
+static int tab_s4_wmark_scale_min = 1;
+static int tab_s4_wmark_scale_max = 1000;
+#endif
 extern int pid_max_min, pid_max_max;
 extern int percpu_pagelist_fraction;
 extern int compat_log;
@@ -1864,6 +1869,17 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= min_free_kbytes_sysctl_handler,
 		.extra1		= &zero,
 	},
+#ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
+	{
+		.procname	= "watermark_scale_factor",
+		.data		= &watermark_scale_factor,
+		.maxlen		= sizeof(watermark_scale_factor),
+		.mode		= 0644,
+		.proc_handler	= watermark_scale_factor_sysctl_handler,
+		.extra1		= &tab_s4_wmark_scale_min,
+		.extra2		= &tab_s4_wmark_scale_max,
+	},
+#endif
 	{
 		.procname	= "extra_free_kbytes",
 		.data		= &extra_free_kbytes,
