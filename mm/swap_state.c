@@ -360,12 +360,32 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		SetPageSwapBacked(new_page);
 		err = __add_to_swap_cache(new_page, entry);
 		if (likely(!err)) {
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+			unsigned long shadow;
+#endif
 			radix_tree_preload_end();
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
 			/*
-			 * Initiate read into locked page and return.
+			 * This slot has a resident swap-cache page again.
+			 * Consume its eviction shadow once and evaluate the
+			 * anonymous refault distance before LRU insertion.
+			 */
+			shadow = tab_s4_swap_shadow_take(entry);
+			if (shadow)
+				workingset_refault(new_page, (void *)shadow);
+#endif
+			/*
+			 * Accepted refaults enter the active anonymous LRU.
+			 * Ordinary swap-ins retain the original inactive-LRU
+			 * insertion and no-readahead policy.
 			 */
 			SetPageWorkingset(new_page);
-			lru_cache_add_anon(new_page);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+			if (shadow && PageActive(new_page))
+				lru_cache_add(new_page);
+			else
+#endif
+				lru_cache_add_anon(new_page);
 			*new_page_allocated = true;
 			return new_page;
 		}
