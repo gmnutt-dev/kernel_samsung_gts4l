@@ -29,6 +29,9 @@
 #include <linux/notifier.h>
 #include <linux/backing-dev.h>
 #include <linux/memcontrol.h>
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+#include <linux/swap_cgroup.h>
+#endif
 #include <linux/gfp.h>
 #include <linux/uio.h>
 #include <linux/hugetlb.h>
@@ -531,20 +534,56 @@ void lru_note_cost(struct lruvec *lruvec, bool file,
 	}
 }
 
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
 /*
- * Restored file pages report the actual refault cost. This is called
- * only after the page cache insertion and memcg charge have completed.
+ * Swapin happens before mem_cgroup_commit_charge(). Use the legacy
+ * swap-cgroup owner ID, whose lifetime is pinned by the swap entry,
+ * rather than misattributing every anonymous refault to root.
+ * Caller holds RCU and zone->lru_lock while using the returned lruvec.
+ */
+static struct lruvec *tab_s4_anon_swap_lruvec(struct page *page,
+					      struct zone *zone)
+{
+#ifdef CONFIG_MEMCG_SWAP
+	if (!mem_cgroup_disabled() && PageSwapCache(page)) {
+		swp_entry_t entry = { .val = page_private(page) };
+		struct mem_cgroup *memcg;
+
+		memcg = mem_cgroup_from_id(lookup_swap_cgroup_id(entry));
+		if (memcg)
+			return mem_cgroup_zone_lruvec(zone, memcg);
+	}
+#endif
+	return mem_cgroup_page_lruvec(page, zone);
+}
+#endif
+
+/*
+ * Refault cost is charged after file-page memcg ownership is known;
+ * anonymous swapcache refaults use their still-live swap-cgroup owner
+ * until the incoming page is committed to an ordinary memory cgroup.
  */
 void lru_note_cost_page(struct page *page)
 {
 	struct zone *zone = page_zone(page);
 	struct lruvec *lruvec;
 
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	rcu_read_lock();
+#endif
 	spin_lock_irq(&zone->lru_lock);
-	lruvec = mem_cgroup_page_lruvec(page, zone);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	if (PageSwapBacked(page))
+		lruvec = tab_s4_anon_swap_lruvec(page, zone);
+	else
+#endif
+		lruvec = mem_cgroup_page_lruvec(page, zone);
 	lru_note_cost(lruvec, page_is_file_cache(page),
 		      hpage_nr_pages(page));
 	spin_unlock_irq(&zone->lru_lock);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	rcu_read_unlock();
+#endif
 }
 #endif
 
@@ -587,10 +626,12 @@ void workingset_note_anon_refault(struct page *page)
 	if (!PageSwapBacked(page))
 		return;
 
+	rcu_read_lock();
 	spin_lock_irq(&zone->lru_lock);
-	lruvec = mem_cgroup_page_lruvec(page, zone);
+	lruvec = tab_s4_anon_swap_lruvec(page, zone);
 	lruvec->reclaim_stat.anon_refault_activations++;
 	spin_unlock_irq(&zone->lru_lock);
+	rcu_read_unlock();
 }
 #endif
 
