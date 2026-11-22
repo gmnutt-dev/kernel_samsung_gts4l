@@ -548,6 +548,30 @@ void lru_note_cost_page(struct page *page)
 }
 #endif
 
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+/*
+ * Successful file-cache refaults guide active-file deactivation.
+ *
+ * The page has already been charged to its owning memcg by filemap.c.
+ * Use this 4.4 kernel's zone lock rather than the v5.9 node lock.
+ * The counter is deliberately file-only: this tree has no anonymous
+ * shadow-entry mechanism or per-type WORKINGSET_ACTIVATE counters.
+ */
+void workingset_note_file_refault(struct page *page)
+{
+	struct zone *zone = page_zone(page);
+	struct lruvec *lruvec;
+
+	if (WARN_ON_ONCE(PageSwapBacked(page)))
+		return;
+
+	spin_lock_irq(&zone->lru_lock);
+	lruvec = mem_cgroup_page_lruvec(page, zone);
+	lruvec->reclaim_stat.file_refault_activations++;
+	spin_unlock_irq(&zone->lru_lock);
+}
+#endif
+
 static void update_page_reclaim_stat(struct lruvec *lruvec,
 				     int file, int rotated)
 {
