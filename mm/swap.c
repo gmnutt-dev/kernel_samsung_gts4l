@@ -572,6 +572,28 @@ void workingset_note_file_refault(struct page *page)
 }
 #endif
 
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+/*
+ * Anonymous refault activation is a separate workingset transition.
+ * Do not fold its observations into file-cache counters: the two LRUs
+ * may require different deactivation decisions. This older kernel
+ * records each event in its zone/memcg lruvec under zone->lru_lock.
+ */
+void workingset_note_anon_refault(struct page *page)
+{
+	struct zone *zone = page_zone(page);
+	struct lruvec *lruvec;
+
+	if (!PageSwapBacked(page))
+		return;
+
+	spin_lock_irq(&zone->lru_lock);
+	lruvec = mem_cgroup_page_lruvec(page, zone);
+	lruvec->reclaim_stat.anon_refault_activations++;
+	spin_unlock_irq(&zone->lru_lock);
+}
+#endif
+
 static void update_page_reclaim_stat(struct lruvec *lruvec,
 				     int file, int rotated)
 {
