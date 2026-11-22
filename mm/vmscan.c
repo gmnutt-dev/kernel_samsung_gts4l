@@ -112,6 +112,14 @@ struct scan_control {
 	unsigned int cache_trim_mode:1;
 	unsigned long file_refault_snapshot;
 #endif
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	unsigned int deactivate_anon:1;
+	unsigned long anon_refault_snapshot;
+#endif
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_RETRY
+	unsigned int skipped_deactivate:1;
+	unsigned int force_deactivate:1;
+#endif
 
 	/* Incremented by the number of inactive pages that were scanned */
 	unsigned long nr_scanned;
@@ -2210,6 +2218,25 @@ static unsigned long shrink_list(enum lru_list lru, unsigned long nr_to_scan,
 		    get_nr_swap_pages() > SWAP_CLUSTER_MAX)
 			may_deactivate = sc->deactivate_file;
 #endif
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+		if (!is_file_lru(lru) && sc->may_swap &&
+		    get_nr_swap_pages() > SWAP_CLUSTER_MAX)
+			may_deactivate = sc->deactivate_anon;
+#endif
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_RETRY
+		/*
+		 * One Linux 5.9-style forced retry after a futile scan,
+		 * but never sacrifice the active file cache when ZRAM is
+		 * out of swap slots. Anonymous deactivation is pointless
+		 * without an available swap destination.
+		 */
+		if (sc->force_deactivate && sc->may_swap &&
+		    get_nr_swap_pages() > SWAP_CLUSTER_MAX)
+			may_deactivate = true;
+		if (!may_deactivate && sc->may_swap &&
+		    get_nr_swap_pages() > SWAP_CLUSTER_MAX)
+			sc->skipped_deactivate = 1;
+#endif
 		if (may_deactivate)
 			shrink_active_list(nr_to_scan, lruvec, sc, lru);
 		return 0;
@@ -2411,10 +2438,19 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 		reclaim_stat->file_refault_activations;
 	sc->deactivate_file =
 		(sc->file_refault_snapshot != reclaim_stat->file_refault_seen);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	sc->anon_refault_snapshot = reclaim_stat->anon_refault_activations;
+	sc->deactivate_anon =
+		(sc->anon_refault_snapshot != reclaim_stat->anon_refault_seen);
+#endif
 	spin_unlock_irq(&zone->lru_lock);
 
 	if (inactive_file_is_low(lruvec))
 		sc->deactivate_file = 1;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	if (inactive_anon_is_low(lruvec))
+		sc->deactivate_anon = 1;
+#endif
 	sc->cache_trim_mode =
 		IS_ENABLED(CONFIG_TAB_S4_V59_CACHE_TRIM) &&
 		!sc->deactivate_file &&
@@ -2692,6 +2728,10 @@ static void shrink_lruvec(struct lruvec *lruvec, int swappiness,
 			}
 		}
 
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_RETRY
+		/* Linux 5.9 reclaim-loop preemption point. */
+		cond_resched();
+#endif
 		if (nr_reclaimed < nr_to_reclaim || scan_adjusted)
 			continue;
 
@@ -2758,6 +2798,10 @@ static void shrink_lruvec(struct lruvec *lruvec, int swappiness,
 	spin_lock_irq(&lruvec_zone(lruvec)->lru_lock);
 	lruvec->reclaim_stat.file_refault_seen =
 		sc->file_refault_snapshot;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	lruvec->reclaim_stat.anon_refault_seen =
+		sc->anon_refault_snapshot;
+#endif
 	spin_unlock_irq(&lruvec_zone(lruvec)->lru_lock);
 #endif
 
@@ -3173,6 +3217,20 @@ retry:
 	if (sc->compaction_ready)
 		return 1;
 
+#ifdef CONFIG_TAB_S4_V59_RECLAIM_RETRY
+	/*
+	 * A bounded retry mirrors the Linux 5.9 skipped-deactivation path.
+	 * It is suppressed near full swap to avoid triggering the Stage 3
+	 * file-cache collapse during ZRAM slot exhaustion.
+	 */
+	if (sc->skipped_deactivate && !sc->force_deactivate &&
+	    sc->may_swap && get_nr_swap_pages() > SWAP_CLUSTER_MAX) {
+		sc->priority = initial_priority;
+		sc->force_deactivate = 1;
+		sc->skipped_deactivate = 0;
+		goto retry;
+	}
+#endif
 	/* Untapped cgroup reserves?  Don't OOM, retry. */
 	if (!sc->may_thrash) {
 		sc->priority = initial_priority;
