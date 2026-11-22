@@ -726,6 +726,24 @@ config TAB_S4_V59_WORKINGSET
 	  Linux 5.9 workingset model while retaining this kernel's original
 	  per-zone accounting and memory-cgroup interfaces.
 
+config TAB_S4_V59_REFAULT_DEACTIVATE
+	bool "Experimental Linux 5.9 refault-guided file LRU deactivation"
+	depends on TAB_S4_V59_WORKINGSET && TAB_S4_V59_RECLAIM_COST
+	default n
+	help
+	  Age nonresident entries on accepted file-cache refaults and
+	  use refault activation observations to guide file LRU
+	  deactivation. Anonymous list handling remains legacy.
+
+config TAB_S4_V59_CACHE_TRIM
+	bool "Experimental refault-aware cache-trim mode"
+	depends on TAB_S4_V59_REFAULT_DEACTIVATE
+	default n
+	help
+	  Prefer inactive file reclaim only when enough inactive file
+	  cache remains and no new file workingset activation was
+	  observed in the previous reclaim cycle.
+
 config TAB_S4_V59_RECLAIM_COST
 	bool "Experimental Linux 5.9 refault-aware reclaim cost balancing"
 	depends on SWAP && TAB_S4_V59_WORKINGSET
