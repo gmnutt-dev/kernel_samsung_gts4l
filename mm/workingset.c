@@ -268,7 +268,12 @@ void workingset_refault(struct page *page, void *shadow)
 	 */
 	refault_distance = (refault - eviction) & EVICTION_MASK;
 
-	inc_zone_state(zone, WORKINGSET_REFAULT);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	if (anon)
+		inc_zone_state(zone, WORKINGSET_REFAULT_ANON);
+	else
+#endif
+		inc_zone_state(zone, WORKINGSET_REFAULT);
 
 	/*
 	 * Compare the distance to the existing workingset size. We
@@ -297,7 +302,12 @@ void workingset_refault(struct page *page, void *shadow)
 		return;
 
 	SetPageActive(page);
-	inc_zone_state(zone, WORKINGSET_ACTIVATE);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	if (anon)
+		inc_zone_state(zone, WORKINGSET_ACTIVATE_ANON);
+	else
+#endif
+		inc_zone_state(zone, WORKINGSET_ACTIVATE);
 	/*
 	 * v5.9 ages nonresident entries again when an eligible refault
 	 * is admitted to the active file workingset. Stage 1 omitted
@@ -316,7 +326,12 @@ void workingset_refault(struct page *page, void *shadow)
 	/* Page was active prior to eviction */
 	if (workingset) {
 		SetPageWorkingset(page);
-		inc_zone_state(zone, WORKINGSET_RESTORE);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+		if (anon)
+			inc_zone_state(zone, WORKINGSET_RESTORE_ANON);
+		else
+#endif
+			inc_zone_state(zone, WORKINGSET_RESTORE);
 		/* Refault of a previously active page represents real cache cost. */
 		if (IS_ENABLED(CONFIG_TAB_S4_V59_RECLAIM_COST))
 			lru_note_cost_page(page);
