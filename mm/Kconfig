@@ -713,6 +713,19 @@ config MAX_DIRTY_THRESH_PAGES
 	  It is only effective when dirty_ratio is used.
 	  (Setting dirty_bytes disables this option.)
 
+# Initial, device-specific backport of the Linux 5.9 workingset model.
+# This does not enable the separate 5.9 reclaim-cost scan balancer.
+config TAB_S4_V59_WORKINGSET
+	bool "Experimental file/anon workingset competition for Tab S4"
+	depends on SWAP
+	default n
+	help
+	  Permit refaulting file pages to compete with anonymous memory when
+	  swap capacity remains. Include anonymous activations and active-list
+	  rotations in the nonresident aging clock. This approximates the
+	  Linux 5.9 workingset model while retaining this kernel's original
+	  per-zone accounting and memory-cgroup interfaces.
+
 config BALANCE_ANON_FILE_RECLAIM
 	bool "During reclaim treat anon and file backed pages equally"
 	depends on SWAP
