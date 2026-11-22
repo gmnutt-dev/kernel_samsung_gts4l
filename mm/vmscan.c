@@ -1728,6 +1728,10 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 				spin_lock_irq(&zone->lru_lock);
 			} else
 				list_add(&page->lru, &pages_to_free);
+		} else if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
+			   is_active_lru(lru)) {
+			/* Advance nonresident age as active file/anon pages rotate. */
+			workingset_activation(page);
 		}
 	}
 
@@ -1963,6 +1967,10 @@ static void move_active_pages_to_lru(struct lruvec *lruvec,
 				spin_lock_irq(&zone->lru_lock);
 			} else
 				list_add(&page->lru, pages_to_free);
+		} else if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
+			   is_active_lru(lru)) {
+			/* Mirror the active-page LRU age accounting of Linux 5.9. */
+			workingset_activation(page);
 		}
 	}
 	__mod_zone_page_state(zone, NR_LRU_BASE + lru, pgmoved);
