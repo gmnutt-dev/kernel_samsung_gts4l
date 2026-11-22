@@ -802,6 +802,42 @@ out:
 	return NULL;
 }
 
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+/*
+ * v5.9 uses XArray value entries to record anonymous refault distance.
+ * This 4.4 swap cache uses radix trees keyed by the encoded swap entry.
+ * A per-slot shadow table keeps those entries out of swap-cache lookup
+ * paths. Lifetime is identical to the swap slot, not the zram block.
+ */
+void tab_s4_swap_shadow_store(swp_entry_t entry, unsigned long shadow)
+{
+	struct swap_info_struct *p = swap_info_get(entry);
+
+	if (!p)
+		return;
+	if (p->tab_s4_anon_shadow)
+		p->tab_s4_anon_shadow[swp_offset(entry)] = shadow;
+	spin_unlock(&p->lock);
+}
+
+unsigned long tab_s4_swap_shadow_take(swp_entry_t entry)
+{
+	struct swap_info_struct *p = swap_info_get(entry);
+	unsigned long shadow = 0;
+	unsigned long offset;
+
+	if (!p)
+		return 0;
+	offset = swp_offset(entry);
+	if (p->tab_s4_anon_shadow) {
+		shadow = p->tab_s4_anon_shadow[offset];
+		p->tab_s4_anon_shadow[offset] = 0;
+	}
+	spin_unlock(&p->lock);
+	return shadow;
+}
+#endif
+
 static unsigned char swap_entry_free(struct swap_info_struct *p,
 				     swp_entry_t entry, unsigned char usage)
 {
@@ -840,6 +876,11 @@ static unsigned char swap_entry_free(struct swap_info_struct *p,
 
 	/* free if no reference */
 	if (!usage) {
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+		/* Drop stale refault history before the slot can be reused. */
+		if (p->tab_s4_anon_shadow)
+			p->tab_s4_anon_shadow[offset] = 0;
+#endif
 		dec_cluster_info_page(p, p->cluster_info, offset);
 		if (offset < p->lowest_bit)
 			p->lowest_bit = offset;
@@ -1907,6 +1948,9 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	unsigned char *swap_map;
 	struct swap_cluster_info *cluster_info;
 	unsigned long *frontswap_map;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	unsigned long *anon_shadow;
+#endif
 	struct file *swap_file, *victim;
 	struct address_space *mapping;
 	struct inode *inode;
@@ -2008,6 +2052,10 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	p->max = 0;
 	swap_map = p->swap_map;
 	p->swap_map = NULL;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	anon_shadow = p->tab_s4_anon_shadow;
+	p->tab_s4_anon_shadow = NULL;
+#endif
 	cluster_info = p->cluster_info;
 	p->cluster_info = NULL;
 	frontswap_map = frontswap_map_get(p);
@@ -2019,6 +2067,9 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	free_percpu(p->percpu_cluster);
 	p->percpu_cluster = NULL;
 	vfree(swap_map);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	vfree(anon_shadow);
+#endif
 	vfree(cluster_info);
 	vfree(frontswap_map);
 	/* Destroy swap account information */
@@ -2476,6 +2527,9 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 	sector_t span;
 	unsigned long maxpages;
 	unsigned char *swap_map = NULL;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	unsigned long *anon_shadow = NULL;
+#endif
 	struct swap_cluster_info *cluster_info = NULL;
 	unsigned long *frontswap_map = NULL;
 	struct page *page = NULL;
@@ -2541,6 +2595,23 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 		error = -ENOMEM;
 		goto bad_swap;
 	}
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	/*
+	 * Use a bounded array sized to the existing swap slots. On the
+	 * 1.66 GiB Tab S4 ZRAM this costs about 3.25 MiB of vmalloc VA.
+	 * Fail swapon rather than enable a half-initialized shadow table.
+	 */
+	if (maxpages > (ULONG_MAX / sizeof(*anon_shadow))) {
+		error = -EOVERFLOW;
+		goto bad_swap;
+	}
+	anon_shadow = vzalloc(maxpages * sizeof(*anon_shadow));
+	if (!anon_shadow) {
+		error = -ENOMEM;
+		goto bad_swap;
+	}
+	p->tab_s4_anon_shadow = anon_shadow;
+#endif
 
 	if (bdi_cap_stable_pages_required(inode_to_bdi(inode)))
 		p->flags |= SWP_STABLE_WRITES;
@@ -2658,7 +2729,13 @@ bad_swap:
 	spin_lock(&swap_lock);
 	p->swap_file = NULL;
 	p->flags = 0;
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	p->tab_s4_anon_shadow = NULL;
+#endif
 	spin_unlock(&swap_lock);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	vfree(anon_shadow);
+#endif
 	vfree(swap_map);
 	vfree(cluster_info);
 	if (swap_file) {
