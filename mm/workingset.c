@@ -294,6 +294,15 @@ void workingset_refault(struct page *page, void *shadow)
 
 	SetPageActive(page);
 	inc_zone_state(zone, WORKINGSET_ACTIVATE);
+	/*
+	 * v5.9 ages nonresident entries again when an eligible refault
+	 * is admitted to the active file workingset. Stage 1 omitted
+	 * this step and could undercount churn among active pages.
+	 */
+	if (IS_ENABLED(CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE)) {
+		workingset_activation(page);
+		workingset_note_file_refault(page);
+	}
 
 	/* Page was active prior to eviction */
 	if (workingset) {
