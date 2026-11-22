@@ -4,6 +4,7 @@ param(
     [string]$Phase
 )
 $ErrorActionPreference = 'Stop'
+Write-Host 'Stage 4 FAST V3 (nonblocking power counters only; per-read progress)' -ForegroundColor Cyan
 $adb = Join-Path $PSScriptRoot 'adb.exe'
 $script = Join-Path $PSScriptRoot 'tab-s4-stage4-snapshot.sh'
 if (-not (Test-Path $adb)) { throw 'adb.exe missing: extract kit directly into D:\platform-tools' }
