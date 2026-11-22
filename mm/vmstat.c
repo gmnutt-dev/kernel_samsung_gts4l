@@ -762,6 +762,11 @@ const char * const vmstat_text[] = {
 	"workingset_refault",
 	"workingset_activate",
 	"workingset_restore",
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	"workingset_refault_anon",
+	"workingset_activate_anon",
+	"workingset_restore_anon",
+#endif
 	"workingset_nodereclaim",
 	"nr_anon_transparent_hugepages",
 	"nr_free_cma",
