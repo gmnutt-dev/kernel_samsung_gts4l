@@ -268,6 +268,7 @@ void workingset_activation(struct page *page);
  */
 void tab_s4_swap_shadow_store(swp_entry_t entry, unsigned long shadow);
 unsigned long tab_s4_swap_shadow_take(swp_entry_t entry);
+void workingset_note_anon_refault(struct page *page);
 #else
 static inline void tab_s4_swap_shadow_store(swp_entry_t entry,
 					      unsigned long shadow) { }
