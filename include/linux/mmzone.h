@@ -235,6 +235,11 @@ struct zone_reclaim_stat {
 	unsigned long		file_refault_activations;
 	unsigned long		file_refault_seen;
 #endif
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	/* Independent accepted anon swap-refault observations per lruvec. */
+	unsigned long		anon_refault_activations;
+	unsigned long		anon_refault_seen;
+#endif
 };
 
 struct lruvec {
