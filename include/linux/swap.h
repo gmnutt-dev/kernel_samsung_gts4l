@@ -214,6 +214,10 @@ struct swap_info_struct {
 	signed char	type;		/* strange name for an index */
 	unsigned int	max;		/* extent of the swap_map */
 	unsigned char *swap_map;	/* vmalloc'ed array of usage counts */
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+	/* Per-slot nonresident shadow; allocated at swapon, cleared at free. */
+	unsigned long *tab_s4_anon_shadow;
+#endif
 	struct swap_cluster_info *cluster_info; /* cluster info. Only for SSD */
 	struct swap_cluster_info free_cluster_head; /* free cluster list head */
 	struct swap_cluster_info free_cluster_tail; /* free cluster list tail */
@@ -257,6 +261,21 @@ struct swap_info_struct {
 void *workingset_eviction(struct address_space *mapping, struct page *page);
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+/*
+ * Backport of v5.9 anonymous swap refault shadows adapted to swap_info.
+ * Slot access is synchronized by swap_info_struct.lock in swapfile.c.
+ */
+void tab_s4_swap_shadow_store(swp_entry_t entry, unsigned long shadow);
+unsigned long tab_s4_swap_shadow_take(swp_entry_t entry);
+#else
+static inline void tab_s4_swap_shadow_store(swp_entry_t entry,
+					      unsigned long shadow) { }
+static inline unsigned long tab_s4_swap_shadow_take(swp_entry_t entry)
+{
+	return 0;
+}
+#endif
 
 #ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
 /* Observe accepted file refaults in the owning zone/memcg lruvec. */
