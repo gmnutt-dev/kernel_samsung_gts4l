@@ -619,7 +619,9 @@ void mark_page_accessed(struct page *page)
 		else
 			__lru_cache_activate_page(page);
 		ClearPageReferenced(page);
-		if (page_is_file_cache(page))
+		/* Linux 5.9-style aging also accounts for anon LRU activity. */
+		if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) ||
+		    page_is_file_cache(page))
 			workingset_activation(page);
 	} else if (!PageReferenced(page)) {
 		SetPageReferenced(page);
