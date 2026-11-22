@@ -258,6 +258,13 @@ void *workingset_eviction(struct address_space *mapping, struct page *page);
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
 
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+/* Observe accepted file refaults in the owning zone/memcg lruvec. */
+void workingset_note_file_refault(struct page *page);
+#else
+static inline void workingset_note_file_refault(struct page *page) { }
+#endif
+
 #ifdef CONFIG_TAB_S4_V59_RECLAIM_COST
 /* lru_note_cost() requires the containing zone's lru_lock. */
 void lru_note_cost(struct lruvec *lruvec, bool file, unsigned long nr_pages);
