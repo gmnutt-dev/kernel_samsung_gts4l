@@ -238,6 +238,7 @@ void *workingset_eviction(struct address_space *mapping, struct page *page)
 void workingset_refault(struct page *page, void *shadow)
 {
 	unsigned long refault_distance;
+	unsigned long workingset_size;
 	struct zone *zone;
 	unsigned long eviction;
 	unsigned long refault;
@@ -272,7 +273,23 @@ void workingset_refault(struct page *page, void *shadow)
 	 * don't act on pages that couldn't stay resident even if all
 	 * the memory was available to the page cache.
 	 */
-	if (refault_distance > zone_page_state(zone, NR_ACTIVE_FILE))
+	workingset_size = zone_page_state(zone, NR_ACTIVE_FILE);
+	/*
+	 * When swap is available, active and inactive anonymous pages
+	 * also compete with repeatedly faulted file pages. Pair this
+	 * eligibility expansion with anonymous nonresident aging in
+	 * mark_page_accessed() and the reclaim putback paths; widening
+	 * the refault window alone would produce false activations.
+	 *
+	 * Once swap is exhausted, keep the old file-only eligibility
+	 * because reclaim cannot evict more anonymous pages.
+	 */
+	if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
+	    get_nr_swap_pages() > 0)
+		workingset_size += zone_page_state(zone, NR_ACTIVE_ANON) +
+				   zone_page_state(zone, NR_INACTIVE_ANON);
+
+	if (refault_distance > workingset_size)
 		return;
 
 	SetPageActive(page);
@@ -291,7 +308,11 @@ void workingset_refault(struct page *page, void *shadow)
  */
 void workingset_activation(struct page *page)
 {
-	atomic_long_inc(&page_zone(page)->inactive_age);
+	if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET))
+		atomic_long_add(hpage_nr_pages(page),
+				&page_zone(page)->inactive_age);
+	else
+		atomic_long_inc(&page_zone(page)->inactive_age);
 }
 
 /*
