@@ -305,13 +305,11 @@ void workingset_refault(struct page *page, void *shadow)
 	 */
 	if (IS_ENABLED(CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE)) {
 		workingset_activation(page);
-		if (anon)
 #ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+		if (anon)
 			workingset_note_anon_refault(page);
-#else
-			;
-#endif
 		else
+#endif
 			workingset_note_file_refault(page);
 	}
 
