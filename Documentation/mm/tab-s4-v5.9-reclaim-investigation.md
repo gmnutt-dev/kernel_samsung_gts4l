@@ -1,6 +1,6 @@
 # Galaxy Tab S4 SM-T830: Linux 5.9 workingset/reclaim backport investigation
 
-Status: **research / staging only; no reclaim code modified, no kernel image built.**
+Status: **stage-1 experimental workingset code implemented; NO native compile or runtime validation yet.**
 
 Base branch: `lineage-24.0`, intentionally **not** the separate `experiment/zsmalloc-v5.9-shrinker` branch. This isolates new reclaim experiments from the earlier shrinker experiment.
 
@@ -78,4 +78,20 @@ Upstream 2020 series:
 
 The audit proves `lmkd` is running, and its settings request the **legacy minfree threshold kill strategy**, rather than the modern thrashing-aware strategy documented for Android 11+. The ROM may still use PSI as a notification source, but `ro.lmk.use_minfree_levels=true` selects the legacy kill logic. A second, separately controlled experiment can assess whether switching to a modern LMKD policy prevents pressure from reaching 95% PSI. **Do not combine that change with a reclaim backport in the same benchmark.**
 
-No kernel source modifications have been applied as part of this investigation as of this document.
+## Stage 1 implementation on this branch
+
+Source changes: `mm/Kconfig`, `arch/arm64/configs/gts4lwifi_defconfig`, `mm/swap.c`, `mm/workingset.c`, and `mm/vmscan.c`.
+
+The explicitly gated `CONFIG_TAB_S4_V59_WORKINGSET=y` for SM-T830:
+- includes anonymous activations in `zone->inactive_age`;
+- ages the nonresident clock when active anon/file pages survive reclaim putback;
+- when free swap slots remain, allows refaulting file pages to challenge active **and inactive** anonymous pages, as in mainline 5.9;
+- falls back to file-only refault qualification when swap is unavailable;
+- retains current zone/memcg layout and the original scanned/rotated reclaim balancer.
+
+**This is an adapted first-stage backport, not the full upstream 14-commit 5.9 LRU cost-based balancer.** The cost model remains a separate stage. Experimental code must not be declared working until compiled, booted, and tested.
+
+Build caveat: text of the WiFi defconfig includes `CONFIG_DIRECT_RECLAIM_FILE_PAGES_ONLY=y`, but its Kconfig dependency is `ZSWAP`, which this target disables; the generated `.config` must be used to verify it stays disabled. `CONFIG_INCREASE_MAXIMUM_SWAPPINESS`, `CONFIG_FIX_INACTIVE_RATIO`, and `CONFIG_TIGHT_PGDAT_BALANCE` share that disabled dependency. Stage 1 must not force-enable them.
+
+Rollback requirement: preserve the old Odin tar and a current 64MiB boot partition backup. Repack the new **Image.gz only**, retaining the separated original kernel_dtb and Magisk ramdisk.
+
