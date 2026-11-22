@@ -722,7 +722,20 @@ static int __remove_mapping(struct address_space *mapping, struct page *page,
 
 	if (PageSwapCache(page)) {
 		swp_entry_t swap = { .val = page_private(page) };
+
 		mem_cgroup_swapout(page, swap);
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+		/*
+		 * Only reclaim-driven deletion is an eviction. Store the
+		 * same zone nonresident-age shadow used for file cache.
+		 * This is done before dropping the swap-cache tree lock,
+		 * so the slot cannot be refaulted between removal and
+		 * recording its age. swapfile.c serializes slot lifetime.
+		 */
+		if (reclaimed)
+			tab_s4_swap_shadow_store(swap,
+				(unsigned long)workingset_eviction(mapping, page));
+#endif
 		__delete_from_swap_cache(page);
 		spin_unlock_irqrestore(&mapping->tree_lock, flags);
 		mem_cgroup_end_page_stat(memcg);
