@@ -316,6 +316,8 @@ struct lruvec *mem_cgroup_page_lruvec(struct page *, struct zone *);
 
 bool task_in_mem_cgroup(struct task_struct *task, struct mem_cgroup *memcg);
 struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p);
+/* Borrowed under rcu_read_lock(); swap accounting keeps IDs alive. */
+struct mem_cgroup *mem_cgroup_from_id(unsigned short id);
 struct mem_cgroup *parent_mem_cgroup(struct mem_cgroup *memcg);
 
 static inline
