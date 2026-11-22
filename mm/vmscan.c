@@ -2183,8 +2183,18 @@ static unsigned long shrink_list(enum lru_list lru, unsigned long nr_to_scan,
 	if (is_active_lru(lru)) {
 		bool may_deactivate = inactive_list_is_low(lruvec, lru);
 #ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
-		/* Preserve the existing anonymous LRU ratio policy. */
-		if (is_file_lru(lru))
+		/*
+		 * Under nearly exhausted swap, get_scan_count() cannot
+		 * balance page reclaim against anonymous memory. Preserve
+		 * the original active-file protection instead of letting
+		 * successive file refaults empty the active page cache.
+		 *
+		 * Recheck here, not only in get_scan_count(), since other
+		 * CPUs may consume the remaining swap slots mid-scan.
+		 * Anonymous deactivation retains the legacy ratio policy.
+		 */
+		if (is_file_lru(lru) &&
+		    get_nr_swap_pages() > SWAP_CLUSTER_MAX)
 			may_deactivate = sc->deactivate_file;
 #endif
 		if (may_deactivate)
