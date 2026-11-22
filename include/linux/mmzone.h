@@ -230,6 +230,11 @@ struct zone_reclaim_stat {
 	unsigned long		anon_cost;
 	unsigned long		file_cost;
 #endif
+#ifdef CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE
+	/* File workingset activations and last consumed reclaim snapshot. */
+	unsigned long		file_refault_activations;
+	unsigned long		file_refault_seen;
+#endif
 };
 
 struct lruvec {
