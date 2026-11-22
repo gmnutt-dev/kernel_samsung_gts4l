@@ -243,6 +243,8 @@ void workingset_refault(struct page *page, void *shadow)
 	unsigned long eviction;
 	unsigned long refault;
 	bool workingset;
+	bool anon = IS_ENABLED(CONFIG_TAB_S4_V59_ANON_WORKINGSET) &&
+		    PageSwapBacked(page);
 
 	unpack_shadow(shadow, &zone, &eviction, &workingset);
 
@@ -275,19 +277,21 @@ void workingset_refault(struct page *page, void *shadow)
 	 */
 	workingset_size = zone_page_state(zone, NR_ACTIVE_FILE);
 	/*
-	 * When swap is available, active and inactive anonymous pages
-	 * also compete with repeatedly faulted file pages. Pair this
-	 * eligibility expansion with anonymous nonresident aging in
-	 * mark_page_accessed() and the reclaim putback paths; widening
-	 * the refault window alone would produce false activations.
-	 *
-	 * Once swap is exhausted, keep the old file-only eligibility
-	 * because reclaim cannot evict more anonymous pages.
+	 * Linux 5.9 evaluates anonymous refaults against file LRU space
+	 * plus active anonymous pages (when more swapping is possible).
+	 * File refaults additionally compete with the inactive anon list.
+	 * This uses this 4.4 kernel's existing zone nonresident-age clock;
+	 * it deliberately does not pretend to have 5.9's memcg ancestry.
 	 */
+	if (anon)
+		workingset_size += zone_page_state(zone, NR_INACTIVE_FILE);
 	if (IS_ENABLED(CONFIG_TAB_S4_V59_WORKINGSET) &&
-	    get_nr_swap_pages() > 0)
-		workingset_size += zone_page_state(zone, NR_ACTIVE_ANON) +
-				   zone_page_state(zone, NR_INACTIVE_ANON);
+	    get_nr_swap_pages() > 0) {
+		workingset_size += zone_page_state(zone, NR_ACTIVE_ANON);
+		if (!anon)
+			workingset_size +=
+				zone_page_state(zone, NR_INACTIVE_ANON);
+	}
 
 	if (refault_distance > workingset_size)
 		return;
@@ -301,7 +305,14 @@ void workingset_refault(struct page *page, void *shadow)
 	 */
 	if (IS_ENABLED(CONFIG_TAB_S4_V59_REFAULT_DEACTIVATE)) {
 		workingset_activation(page);
-		workingset_note_file_refault(page);
+		if (anon)
+#ifdef CONFIG_TAB_S4_V59_ANON_WORKINGSET
+			workingset_note_anon_refault(page);
+#else
+			;
+#endif
+		else
+			workingset_note_file_refault(page);
 	}
 
 	/* Page was active prior to eviction */
