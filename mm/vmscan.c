@@ -48,6 +48,9 @@
 #include <linux/printk.h>
 #include <linux/migrate.h>
 #include <linux/psi.h>
+#ifdef CONFIG_TAB_S4_STAGE6B
+#include <linux/tab_s4_stage6b.h>
+#endif
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -1870,6 +1873,9 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	spin_lock_irq(&zone->lru_lock);
 
 	reclaim_stat->recent_scanned[file] += nr_taken;
+#ifdef CONFIG_TAB_S4_STAGE6B
+	tab_s4_stage6b_reclaim_locked(lruvec, file, nr_taken, nr_reclaimed);
+#endif
 	if (nr_pageout)
 		lru_note_cost(lruvec, file, nr_pageout);
 
@@ -2116,6 +2122,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	 * get_scan_count.
 	 */
 	reclaim_stat->recent_rotated[file] += nr_rotated;
+#ifdef CONFIG_TAB_S4_STAGE6B
+	tab_s4_stage6b_rotation_locked(lruvec, file, nr_taken, nr_rotated);
+#endif
 
 	move_active_pages_to_lru(lruvec, &l_active, &l_hold, lru);
 	move_active_pages_to_lru(lruvec, &l_inactive, &l_hold, lru - LRU_ACTIVE);
@@ -2396,6 +2405,9 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	enum lru_list lru;
 	bool some_scanned;
 	int pass;
+#ifdef CONFIG_TAB_S4_STAGE6B
+	unsigned int stage6b_protection[2] = { 0, 0 };
+#endif
 
 	/*
 	 * If the zone or memcg is small, nr[l] can be 0.  This
@@ -2616,6 +2628,23 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	fraction[1] = fp;
 	denominator = ap + fp + 1;
 out:
+#ifdef CONFIG_TAB_S4_STAGE6B
+	/*
+	 * Context protection is deliberately a mild preference, never a
+	 * hard eviction ban. Do not obstruct memcg reclaim, urgent reclaim,
+	 * forced Stage 5 retry, memory boosting, or nearing swap exhaustion.
+	 * Snapshot both class scores under the existing zone LRU lock.
+	 */
+	if (READ_ONCE(tab_s4_stage6b_protection) && global_reclaim(sc) &&
+	    sc->may_swap && sc->priority > 3 && !sc->force_deactivate &&
+	    !need_memory_boosting(zone) &&
+	    get_nr_swap_pages() > max_t(long, SWAP_CLUSTER_MAX * 8,
+					 total_swap_pages / 16)) {
+		spin_lock_irq(&zone->lru_lock);
+		tab_s4_stage6b_percent_locked(lruvec, stage6b_protection);
+		spin_unlock_irq(&zone->lru_lock);
+	}
+#endif
 	some_scanned = false;
 	/* Only use force_scan on second pass. */
 	for (pass = 0; !some_scanned && pass < 2; pass++) {
@@ -2656,6 +2685,16 @@ out:
 				BUG();
 			}
 
+#ifdef CONFIG_TAB_S4_STAGE6B
+			/* Leave >=75% of each selected LRU scan target intact. */
+			if (!pass && scan && stage6b_protection[file]) {
+				unsigned long deferred =
+					scan * stage6b_protection[file] / 100;
+
+				scan -= deferred;
+				tab_s4_stage6b_deferred(file, deferred);
+			}
+#endif
 			*lru_pages += size;
 			nr[lru] = scan;
 
