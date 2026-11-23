@@ -4004,6 +4004,10 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 			unsigned int activity[2] = { 0, 0 };
 			unsigned long max_batch, size, batch;
 
+			/* Retain the same memory.low protection as shrink_zone(). */
+			if (mem_cgroup_low(NULL, memcg))
+				goto next_memcg;
+
 			lruvec = mem_cgroup_zone_lruvec(zone, memcg);
 			spin_lock_irq(&zone->lru_lock);
 			tab_s4_stage6b_percent_locked(lruvec, activity);
@@ -4029,6 +4033,12 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 			if (get_nr_swap_pages() <= total_swap_pages / 2) {
 				tab_s4_stage6c_skip(STAGE6C_SKIP_SWAP);
 				goto done;
+			}
+
+			/* Avoid adding work while another reclaimer isolates pages. */
+			if (__too_many_isolated(zone, is_file_lru(lru), &sc, 1)) {
+				tab_s4_stage6c_skip(STAGE6C_SKIP_NO_PAGES);
+				goto next_memcg;
 			}
 
 			size = get_lru_size(lruvec, lru);
