@@ -754,6 +754,22 @@ config TAB_S4_V518_COW_REUSE
 	  needed. Retain the legacy locked single-map/single-ref checks.
 	  This does not import PageAnonExclusive or folio infrastructure.
 
+config TAB_S4_STAGE6B
+	bool "Tab S4 Stage 6B bounded context-sensitive LRU scan protection"
+	depends on MMU && SWAP && PROC_FS && SYSCTL
+	depends on TAB_S4_V59_ANON_WORKINGSET && TAB_S4_V59_RECLAIM_RETRY
+	default n
+	help
+	  Maintain separate short/long activity scores per zone and memory
+	  cgroup LRU vector, for file and anonymous pages. Accepted refaults,
+	  active-list rotations and productive reclaim update the scores
+	  under the existing zone LRU lock. Reduce ordinary reclaim scan
+	  targets by at most 25 percent while scores remain high. Disable
+	  protection near swap exhaustion, at urgent reclaim priority, and
+	  on forced retries. No page pinning, extra page metadata, timers,
+	  or per-access tracing. Runtime switch: vm.tab_s4_stage6b_protection
+	  (0 = observe without scan adjustment, 1 = apply the bounded policy).
+
 config TAB_S4_LMKD_VMSTAT_COMPAT
 	bool "Tab S4 Android lmkd aggregate /proc/vmstat reclaim counters"
 	depends on PROC_FS && VM_EVENT_COUNTERS
