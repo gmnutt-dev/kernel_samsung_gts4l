@@ -754,6 +754,16 @@ config TAB_S4_V518_COW_REUSE
 	  needed. Retain the legacy locked single-map/single-ref checks.
 	  This does not import PageAnonExclusive or folio infrastructure.
 
+config TAB_S4_LMKD_VMSTAT_COMPAT
+	bool "Tab S4 Android lmkd aggregate /proc/vmstat reclaim counters"
+	depends on PROC_FS && VM_EVENT_COUNTERS
+	default n
+	help
+	  Append pgscan_kswapd, pgscan_direct and pgrefill to /proc/vmstat
+	  as read-only sums of the legacy per-zone vm_event counters.
+	  Modern userspace lmkd expects these aggregate names. No extra
+	  reclaim accounting or runtime kernel memory-policy changes.
+
 config TAB_S4_ZS_FREE_UNLOCKED
 	bool "Tab S4 Linux 7.3-style zsmalloc free outside size-class lock"
 	depends on ZSMALLOC && COMPACTION
