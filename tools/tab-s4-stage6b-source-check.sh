@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 6B source invariant checks. No claim of an ARM64 native build.
 set -euo pipefail
-src="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+src="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 fail(){ printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 has(){ grep -Fq -- "$2" "$src/$1" || fail "$1 missing [$2]"; }
 
@@ -23,7 +23,6 @@ has mm/vmscan.c 'tab_s4_stage6b_percent_locked(lruvec, stage6b_protection);'
 has mm/vmscan.c 'sc->priority > 3 && !sc->force_deactivate'
 has mm/vmscan.c 'total_swap_pages / 16'
 has mm/vmscan.c 'if (!pass && scan && stage6b_protection[file])'
-has kernel/sysctl.c '.procname' # validate real text below
 has kernel/sysctl.c '"tab_s4_stage6b_protection"'
 has mm/tab_s4_stage6b.c 'STAGE6B_SCORE_MAX       15U'
 has mm/tab_s4_stage6b.c 'STAGE6B_MAX_PROTECTION  25U'
