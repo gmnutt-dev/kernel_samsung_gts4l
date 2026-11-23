@@ -41,6 +41,10 @@ static atomic64_t stage6c_events_expired = ATOMIC64_INIT(0);
 static atomic64_t stage6c_runs = ATOMIC64_INIT(0);
 static atomic64_t stage6c_requested_pages = ATOMIC64_INIT(0);
 static atomic64_t stage6c_reclaimed_pages = ATOMIC64_INIT(0);
+static atomic64_t stage6c_duration_ns = ATOMIC64_INIT(0);
+static atomic64_t stage6c_duration_max_ns = ATOMIC64_INIT(0);
+static atomic64_t stage6c_runs_over_50ms = ATOMIC64_INIT(0);
+static atomic64_t stage6c_runs_over_200ms = ATOMIC64_INIT(0);
 static atomic64_t stage6c_file_requested = ATOMIC64_INIT(0);
 static atomic64_t stage6c_anon_requested = ATOMIC64_INIT(0);
 static atomic64_t stage6c_skips[STAGE6C_SKIP_MAX];
@@ -113,8 +117,22 @@ bool tab_s4_stage6c_claim(void)
 
 void tab_s4_stage6c_record(unsigned long requested, unsigned long reclaimed,
                            unsigned long file_requested,
-                           unsigned long anon_requested)
+                           unsigned long anon_requested, u64 duration_ns)
 {
+        u64 max_seen = atomic64_read(&stage6c_duration_max_ns);
+
+        atomic64_add(duration_ns, &stage6c_duration_ns);
+        while (duration_ns > max_seen) {
+                u64 before = atomic64_cmpxchg(&stage6c_duration_max_ns,
+                                               max_seen, duration_ns);
+                if (before == max_seen)
+                        break;
+                max_seen = before;
+        }
+        if (duration_ns >= 50ULL * 1000 * 1000)
+                atomic64_inc(&stage6c_runs_over_50ms);
+        if (duration_ns >= 200ULL * 1000 * 1000)
+                atomic64_inc(&stage6c_runs_over_200ms);
         atomic64_add(requested, &stage6c_requested_pages);
         atomic64_add(reclaimed, &stage6c_reclaimed_pages);
         atomic64_add(file_requested, &stage6c_file_requested);
@@ -153,6 +171,10 @@ static int stage6c_show(struct seq_file *m, void *ignored)
         SHOW(m, "runs", stage6c_runs);
         SHOW(m, "requested_pages", stage6c_requested_pages);
         SHOW(m, "reclaimed_pages", stage6c_reclaimed_pages);
+        SHOW(m, "total_reclaim_duration_ns", stage6c_duration_ns);
+        SHOW(m, "max_reclaim_duration_ns", stage6c_duration_max_ns);
+        SHOW(m, "runs_over_50ms", stage6c_runs_over_50ms);
+        SHOW(m, "runs_over_200ms", stage6c_runs_over_200ms);
         SHOW(m, "file_requested_pages", stage6c_file_requested);
         SHOW(m, "anon_requested_pages", stage6c_anon_requested);
         SHOW(m, "skipped_watermark", stage6c_skips[STAGE6C_SKIP_WATERMARK]);
