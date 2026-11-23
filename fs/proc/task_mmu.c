@@ -1779,18 +1779,25 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 	reclaim_walk.mm = mm;
 	reclaim_walk.pmd_entry = reclaim_pte_range;
 
-	rp.nr_to_reclaim = ~0;
+	/* INT_MAX is a positive bounded target, unlike ~0 (which is -1). */
+	rp.nr_to_reclaim = INT_MAX;
 	rp.nr_reclaimed = 0;
+	rp.nr_scanned = 0;
+	rp.vma = NULL;
 	reclaim_walk.private = &rp;
 
 	down_read(&mm->mmap_sem);
 	if (type == RECLAIM_RANGE) {
 		vma = find_vma(mm, start);
 		while (vma) {
-			if (vma->vm_start > end)
+			if (vma->vm_start >= end)
 				break;
-			if (is_vm_hugetlb_page(vma))
+			/* Always advance when skipping a VMA. */
+			if (is_vm_hugetlb_page(vma) ||
+			    (vma->vm_flags & VM_LOCKED)) {
+				vma = vma->vm_next;
 				continue;
+			}
 
 			rp.vma = vma;
 			walk_page_range(max(vma->vm_start, start),
@@ -1800,7 +1807,8 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 		}
 	} else {
 		for (vma = mm->mmap; vma; vma = vma->vm_next) {
-			if (is_vm_hugetlb_page(vma))
+			if (is_vm_hugetlb_page(vma) ||
+			    (vma->vm_flags & VM_LOCKED))
 				continue;
 
 			if (type == RECLAIM_ANON && vma->vm_file)
