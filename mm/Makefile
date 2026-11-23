@@ -43,6 +43,7 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 			   debug.o $(mmu-y) showmem.o showmem_extra.o vmpressure.o
 
 obj-y += init-mm.o
+obj-$(CONFIG_TAB_S4_STAGE6A) += tab_s4_stage6a.o
 
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o
