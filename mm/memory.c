@@ -2402,38 +2402,10 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (PageAnon(old_page)) {
 #ifdef CONFIG_TAB_S4_V518_COW_REUSE
 		/*
-		 * Linux 5.18: a sole mapped anonymous page may have one more
-		 * reference from swapcache or a local LRU pagevec. Drain only
-		 * the local pending LRU additions, then test again.
-		 *
-		 * PageKsm does not necessarily increment the refcount.
-		 * Never reuse while another reference/pin remains.
+		 * Linux 5.18 53a05ad9f21d and d4c470970d45:
+		 * removable swapcache and local LRU pagevec references are
+		 * not by themselves evidence of another mapped owner.
 		 */
-		if (PageKsm(old_page) || page_count(old_page) > 3)
-			goto copy;
-		if (!PageLRU(old_page))
-			lru_add_drain();
-		if (page_count(old_page) > 1 + PageSwapCache(old_page))
-			goto copy;
-		if (!trylock_page(old_page))
-			goto copy;
-		if (PageSwapCache(old_page))
-			try_to_free_swap(old_page);
-		if (PageKsm(old_page) || page_count(old_page) != 1) {
-			unlock_page(old_page);
-			goto copy;
-		}
-#else
-		/*
-		 * Linux 5.18 53a05ad9f21d / d4c470970d45, adapted to the
-		 * 4.4 struct page and legacy PTE locking model.
-		 *
-		 * A private anonymous page may carry a swapcache reference or
-		 * a pending local LRU pagevec reference. Neither alone proves
-		 * another process owns the page. Never relax the final
-		 * single-map / single-ref test under the page lock.
-		 */
-#ifdef CONFIG_TAB_S4_V518_COW_REUSE
 		if (PageKsm(old_page) || page_count(old_page) > 3)
 			goto copy;
 		if (!PageLRU(old_page))
@@ -2451,12 +2423,12 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		if (!trylock_page(old_page))
 			goto copy;
 #endif
+		/* Preserve conservative 4.4 ownership verification under lock. */
 		if (PageKsm(old_page) || page_mapcount(old_page) != 1 ||
 		    page_count(old_page) != 1) {
 			unlock_page(old_page);
 			goto copy;
 		}
-#endif
 		/*
 		 * We have the only page reference and the page is locked:
 		 * safely make the existing mapping writable without copying.
