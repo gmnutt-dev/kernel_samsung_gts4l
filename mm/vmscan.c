@@ -55,6 +55,8 @@
 #include <linux/swapops.h>
 #include <linux/balloon_compaction.h>
 
+#include <linux/tab_s4_stage6a.h>
+
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -3373,6 +3375,7 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 {
 	unsigned long nr_reclaimed;
 	gfp_t reclaim_mask = memalloc_noio_flags(gfp_mask);
+	u64 stage6a_start_ns = tab_s4_stage6a_start();
 	struct scan_control sc = {
 		.nr_to_reclaim = SWAP_CLUSTER_MAX,
 		.gfp_mask = reclaim_mask,
@@ -3399,8 +3402,11 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 	 * 1 is returned so that the page allocator does not OOM kill at this
 	 * point.
 	 */
-	if (throttle_direct_reclaim(reclaim_mask, zonelist, nodemask))
+	if (throttle_direct_reclaim(reclaim_mask, zonelist, nodemask)) {
+		/* Return value 1 is a retry hint, not a reclaimed page. */
+		tab_s4_stage6a_direct_end(stage6a_start_ns, 0, true);
 		return 1;
+	}
 
 	trace_mm_vmscan_direct_reclaim_begin(order,
 				sc.may_writepage,
@@ -3409,6 +3415,7 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
 	trace_mm_vmscan_direct_reclaim_end(nr_reclaimed);
+	tab_s4_stage6a_direct_end(stage6a_start_ns, nr_reclaimed, false);
 
 	return nr_reclaimed;
 }
@@ -3728,6 +3735,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 	unsigned long nr_soft_reclaimed;
 	unsigned long nr_soft_scanned;
 	unsigned long pflags;
+	u64 stage6a_start_ns = tab_s4_stage6a_start();
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
 		.reclaim_idx = MAX_NR_ZONES - 1,
@@ -3877,6 +3885,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 
 out:
 	psi_memstall_leave(&pflags);
+	tab_s4_stage6a_kswapd_end(stage6a_start_ns);
 	/*
 	 * Return the highest zone idx we were reclaiming at so
 	 * prepare_kswapd_sleep() makes the same decisions as here.
