@@ -51,6 +51,9 @@
 #ifdef CONFIG_TAB_S4_STAGE6B
 #include <linux/tab_s4_stage6b.h>
 #endif
+#ifdef CONFIG_TAB_S4_STAGE6C
+#include <linux/tab_s4_stage6c.h>
+#endif
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -3923,6 +3926,140 @@ out:
 	return end_zone;
 }
 
+#ifdef CONFIG_TAB_S4_STAGE6C
+/*
+ * One bounded proactive pass on an existing kswapd, only after a moderate
+ * vmpressure event and only when the ordinary kswapd watermarks are met.
+ *
+ * This bypasses no existing free/reclaim path: shrink_inactive_list() still
+ * performs all page eligibility, writeback and accounting checks. We do
+ * not deactivate the active LRUs or override Stage 5 reclaim emergencies.
+ * The requested scan budget is global per event, not per memcg.
+ */
+static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
+{
+	struct scan_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.reclaim_idx = MAX_NR_ZONES - 1,
+		.order = 0,
+		.priority = DEF_PRIORITY,
+		.may_writepage = 0,
+		.may_unmap = 1,
+		.may_swap = 1,
+		.swappiness = vm_swappiness,
+	};
+	unsigned long requested = 0, reclaimed = 0;
+	unsigned long file_requested = 0, anon_requested = 0;
+	unsigned long budget;
+	int i;
+
+	if (!tab_s4_stage6c_claim())
+		return;
+
+	/* Swap exhaustion and low-free-space emergencies belong to Stage 5. */
+	if (total_swap_pages <= 0 ||
+	    get_nr_swap_pages() <= total_swap_pages / 2) {
+		tab_s4_stage6c_skip(STAGE6C_SKIP_SWAP);
+		return;
+	}
+
+	budget = clamp_t(unsigned long,
+		READ_ONCE(tab_s4_stage6c_budget), 16, 128);
+	for (i = pgdat->nr_zones - 1; i >= 0 && requested < budget; i--) {
+		struct zone *zone = pgdat->node_zones + i;
+		struct mem_cgroup *memcg;
+		unsigned long extra;
+		unsigned int contexts = 0;
+
+		if (!populated_zone(zone) || !zone_reclaimable(zone))
+			continue;
+		if (need_memory_boosting(zone)) {
+			tab_s4_stage6c_skip(STAGE6C_SKIP_BOOST);
+			continue;
+		}
+
+		/*
+		 * Act in a narrow band just ABOVE the original high watermark.
+		 * When below high, ordinary kswapd keeps priority. When well above
+		 * high, early eviction would be needless work.
+		 */
+		extra = clamp_t(unsigned long,
+			high_wmark_pages(zone) - low_wmark_pages(zone),
+			SWAP_CLUSTER_MAX, 128);
+		if (!zone_watermark_ok_safe(zone, 0, high_wmark_pages(zone), 0) ||
+		    zone_watermark_ok_safe(zone, 0,
+				 high_wmark_pages(zone) + extra, 0)) {
+			tab_s4_stage6c_skip(STAGE6C_SKIP_WATERMARK);
+			continue;
+		}
+
+		memcg = mem_cgroup_iter(NULL, NULL, NULL);
+		do {
+			struct lruvec *lruvec;
+			enum lru_list lru;
+			unsigned int activity[2] = { 0, 0 };
+			unsigned long max_batch, size, batch;
+
+			lruvec = mem_cgroup_zone_lruvec(zone, memcg);
+			spin_lock_irq(&zone->lru_lock);
+			tab_s4_stage6b_percent_locked(lruvec, activity);
+			spin_unlock_irq(&zone->lru_lock);
+
+			/* Prefer the cooler inactive class, never active pages. */
+			if (activity[0] < activity[1] && activity[0] <= 12 &&
+			    get_nr_swap_pages() > total_swap_pages / 2 &&
+			    get_lru_size(lruvec, LRU_INACTIVE_ANON) >= 16)
+				lru = LRU_INACTIVE_ANON;
+			else if (activity[1] <= 12 &&
+				 get_lru_size(lruvec, LRU_INACTIVE_FILE) >= 16)
+				lru = LRU_INACTIVE_FILE;
+			else if (activity[0] <= 12 &&
+				 get_nr_swap_pages() > total_swap_pages / 2 &&
+				 get_lru_size(lruvec, LRU_INACTIVE_ANON) >= 16)
+				lru = LRU_INACTIVE_ANON;
+			else {
+				tab_s4_stage6c_skip(STAGE6C_SKIP_ACTIVITY);
+				goto next_memcg;
+			}
+
+			if (get_nr_swap_pages() <= total_swap_pages / 2) {
+				tab_s4_stage6c_skip(STAGE6C_SKIP_SWAP);
+				goto done;
+			}
+
+			size = get_lru_size(lruvec, lru);
+			max_batch = min_t(unsigned long,
+				budget - requested, SWAP_CLUSTER_MAX);
+			batch = min(size, max_batch);
+			if (!batch) {
+				tab_s4_stage6c_skip(STAGE6C_SKIP_NO_PAGES);
+				goto next_memcg;
+			}
+
+			/* Keep clean-file eviction off the writeback path. */
+			sc.may_writepage = (lru == LRU_INACTIVE_ANON);
+			sc.reclaim_idx = i;
+			reclaimed += shrink_inactive_list(batch, lruvec, &sc, lru);
+			requested += batch;
+			if (lru == LRU_INACTIVE_ANON)
+				anon_requested += batch;
+			else
+				file_requested += batch;
+			cond_resched();
+next_memcg:
+			/* A maximum of eight contexts per zone per notification. */
+			if (++contexts >= 8 || requested >= budget) {
+				mem_cgroup_iter_break(NULL, memcg);
+				break;
+			}
+		} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+	}
+done:
+	tab_s4_stage6c_record(requested, reclaimed,
+				file_requested, anon_requested);
+}
+#endif
+
 static void kswapd_try_to_sleep(pg_data_t *pgdat, int order,
 				int classzone_idx, int balanced_classzone_idx)
 {
@@ -4080,6 +4217,10 @@ static int kswapd(void *p)
 						classzone_idx, order);
 			balanced_classzone_idx = balance_pgdat(pgdat, order,
 								classzone_idx);
+#ifdef CONFIG_TAB_S4_STAGE6C
+			/* Optional event-driven work after normal background reclaim. */
+			tab_s4_stage6c_kswapd_step(pgdat);
+#endif
 		}
 	}
 
