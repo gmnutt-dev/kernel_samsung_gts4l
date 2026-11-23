@@ -770,6 +770,20 @@ config TAB_S4_STAGE6B
 	  or per-access tracing. Runtime switch: vm.tab_s4_stage6b_protection
 	  (0 = observe without scan adjustment, 1 = apply the bounded policy).
 
+config TAB_S4_STAGE6C
+	bool "Tab S4 Stage 6C event-driven bounded proactive reclaim"
+	depends on TAB_S4_STAGE6B && PROC_FS && SYSCTL
+	default n
+	help
+	  Subscribe to global vmpressure events and wake the existing kswapd
+	  for a small early reclaim pass. Only accept moderate pressure with
+	  at least half of logical swap slots free, in a narrow band above
+	  the normal high watermark. Do not alter direct reclaim, ordinary
+	  kswapd balancing, zram sizing or LMKD behavior.
+	  New feature defaults OFF at boot. Runtime enable and bounded scan
+	  target are under /proc/sys/vm/tab_s4_stage6c_*; read-only lifetime
+	  event and reclaim metrics are in /proc/tab_s4_stage6c.
+
 config TAB_S4_LMKD_VMSTAT_COMPAT
 	bool "Tab S4 Android lmkd aggregate /proc/vmstat reclaim counters"
 	depends on PROC_FS && VM_EVENT_COUNTERS
