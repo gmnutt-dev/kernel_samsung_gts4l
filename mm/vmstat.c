@@ -878,6 +878,15 @@ const char * const vmstat_text[] = {
 	"vmacache_find_hits",
 #endif
 #endif /* CONFIG_VM_EVENTS_COUNTERS */
+#if defined(CONFIG_TAB_S4_LMKD_VMSTAT_COMPAT) && defined(CONFIG_VM_EVENT_COUNTERS)
+	/*
+	 * Android lmkd reads these aggregate names. Kernel 4.4 exposes only
+	 * per-zone equivalents; append aliases without changing event indices.
+	 */
+	"pgscan_kswapd",
+	"pgscan_direct",
+	"pgrefill",
+#endif
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */
 
@@ -1344,6 +1353,10 @@ static void *vmstat_start(struct seq_file *m, loff_t *pos)
 
 #ifdef CONFIG_VM_EVENT_COUNTERS
 	stat_items_size += sizeof(struct vm_event_state);
+#ifdef CONFIG_TAB_S4_LMKD_VMSTAT_COMPAT
+	/* Three read-only aliases derived from existing per-zone counters. */
+	stat_items_size += 3 * sizeof(unsigned long);
+#endif
 #endif
 
 	v = kmalloc(stat_items_size, GFP_KERNEL);
@@ -1362,6 +1375,30 @@ static void *vmstat_start(struct seq_file *m, loff_t *pos)
 	all_vm_events(v);
 	v[PGPGIN] /= 2;		/* sectors -> kbytes */
 	v[PGPGOUT] /= 2;
+#ifdef CONFIG_TAB_S4_LMKD_VMSTAT_COMPAT
+	{
+		unsigned long pgscan_kswapd = 0, pgscan_direct = 0;
+		unsigned long pgrefill = 0;
+		int zid;
+
+		/*
+		 * __count_zone_vm_events indexes these counters by the zone
+		 * offset relative to ZONE_NORMAL. Sum the already collected
+		 * per-CPU events. No new counters or reclaim-path overhead.
+		 */
+		for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+			pgscan_kswapd += v[PGSCAN_KSWAPD_NORMAL -
+						ZONE_NORMAL + zid];
+			pgscan_direct += v[PGSCAN_DIRECT_NORMAL -
+						ZONE_NORMAL + zid];
+			pgrefill += v[PGREFILL_NORMAL -
+						ZONE_NORMAL + zid];
+		}
+		v[NR_VM_EVENT_ITEMS + 0] = pgscan_kswapd;
+		v[NR_VM_EVENT_ITEMS + 1] = pgscan_direct;
+		v[NR_VM_EVENT_ITEMS + 2] = pgrefill;
+	}
+#endif
 #endif
 	return (unsigned long *)m->private + *pos;
 }
