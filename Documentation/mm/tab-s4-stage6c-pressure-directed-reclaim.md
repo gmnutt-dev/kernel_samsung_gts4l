@@ -92,7 +92,8 @@ record the **starting swap occupancy** before SimCity.
 
 The read-only `/proc/tab_s4_stage6c` exposes event acceptance,
 pressure/cooldown/swap rejections, per-zone eligibility skips, requested
-file/anon scans and actually reclaimed pages. Combine this with
+file/anon scans, actually reclaimed pages, and total/max extra-pass
+latency including counts above 50 and 200 ms. Combine this with
 `/proc/tab_s4_stage6b`, `/proc/vmstat`, PSI, `/proc/meminfo`, ZRAM
 mm_stat, swaps and Android event logs.
 
