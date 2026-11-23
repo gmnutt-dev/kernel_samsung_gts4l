@@ -11,7 +11,7 @@ extern int tab_s4_stage6c_budget;
 bool tab_s4_stage6c_claim(void);
 void tab_s4_stage6c_record(unsigned long requested, unsigned long reclaimed,
                            unsigned long file_requested,
-                           unsigned long anon_requested);
+                           unsigned long anon_requested, u64 duration_ns);
 void tab_s4_stage6c_skip(unsigned int reason);
 enum {
         STAGE6C_SKIP_WATERMARK,
@@ -26,7 +26,8 @@ static inline bool tab_s4_stage6c_claim(void) { return false; }
 static inline void tab_s4_stage6c_record(unsigned long requested,
                                           unsigned long reclaimed,
                                           unsigned long file_requested,
-                                          unsigned long anon_requested) { }
+                                          unsigned long anon_requested,
+                                          u64 duration_ns) { }
 static inline void tab_s4_stage6c_skip(unsigned int reason) { }
 #endif
 
