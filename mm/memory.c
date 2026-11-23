@@ -2424,12 +2424,35 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			goto copy;
 		}
 #else
+		/*
+		 * Linux 5.18 53a05ad9f21d / d4c470970d45, adapted to the
+		 * 4.4 struct page and legacy PTE locking model.
+		 *
+		 * A private anonymous page may carry a swapcache reference or
+		 * a pending local LRU pagevec reference. Neither alone proves
+		 * another process owns the page. Never relax the final
+		 * single-map / single-ref test under the page lock.
+		 */
+#ifdef CONFIG_TAB_S4_V518_COW_REUSE
+		if (PageKsm(old_page) || page_count(old_page) > 3)
+			goto copy;
+		if (!PageLRU(old_page))
+			lru_add_drain();
+		if (page_count(old_page) > 1 + PageSwapCache(old_page))
+			goto copy;
+		if (!trylock_page(old_page))
+			goto copy;
+		if (PageSwapCache(old_page))
+			try_to_free_swap(old_page);
+#else
 		/* PageKsm() doesn't necessarily raise the page refcount */
 		if (PageKsm(old_page) || page_count(old_page) != 1)
 			goto copy;
 		if (!trylock_page(old_page))
 			goto copy;
-		if (PageKsm(old_page) || page_mapcount(old_page) != 1 || page_count(old_page) != 1) {
+#endif
+		if (PageKsm(old_page) || page_mapcount(old_page) != 1 ||
+		    page_count(old_page) != 1) {
 			unlock_page(old_page);
 			goto copy;
 		}
