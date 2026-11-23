@@ -1603,7 +1603,7 @@ static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 {
 	struct reclaim_param *rp = walk->private;
 	struct vm_area_struct *vma = rp->vma;
-	pte_t *pte, ptent;
+	pte_t *pte, *pte_start, ptent;
 	spinlock_t *ptl;
 	struct page *page;
 	LIST_HEAD(page_list);
@@ -1616,6 +1616,7 @@ static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 cont:
 	isolated = 0;
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	pte_start = pte;
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
 		ptent = *pte;
 		if (!pte_present(ptent))
@@ -1633,10 +1634,13 @@ cont:
 				page_is_file_cache(page));
 		isolated++;
 		rp->nr_scanned++;
-		if ((isolated >= SWAP_CLUSTER_MAX) || !rp->nr_to_reclaim)
+		if ((isolated >= SWAP_CLUSTER_MAX) || !rp->nr_to_reclaim) {
+			addr += PAGE_SIZE;
 			break;
+		}
 	}
-	pte_unmap_unlock(pte - 1, ptl);
+	/* The loop may exit at the first PTE, so pte - 1 is unsafe. */
+	pte_unmap_unlock(pte_start, ptl);
 	reclaimed = reclaim_pages_from_list(&page_list, vma);
 	rp->nr_reclaimed += reclaimed;
 	rp->nr_to_reclaim -= reclaimed;
@@ -1667,6 +1671,8 @@ struct reclaim_param reclaim_task_anon(struct task_struct *task,
 
 	rp.nr_reclaimed = 0;
 	rp.nr_scanned = 0;
+	rp.nr_to_reclaim = nr_to_reclaim;
+	rp.vma = NULL;
 	get_task_struct(task);
 	mm = get_task_mm(task);
 	if (!mm)
