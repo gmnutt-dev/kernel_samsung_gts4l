@@ -36,6 +36,9 @@
 #include <linux/uio.h>
 #include <linux/hugetlb.h>
 #include <linux/page_idle.h>
+#ifdef CONFIG_TAB_S4_STAGE6B
+#include <linux/tab_s4_stage6b.h>
+#endif
 
 #include "internal.h"
 
@@ -607,6 +610,9 @@ void workingset_note_file_refault(struct page *page)
 	spin_lock_irq(&zone->lru_lock);
 	lruvec = mem_cgroup_page_lruvec(page, zone);
 	lruvec->reclaim_stat.file_refault_activations++;
+#ifdef CONFIG_TAB_S4_STAGE6B
+	tab_s4_stage6b_refault_locked(lruvec, true);
+#endif
 	spin_unlock_irq(&zone->lru_lock);
 }
 #endif
@@ -630,6 +636,9 @@ void workingset_note_anon_refault(struct page *page)
 	spin_lock_irq(&zone->lru_lock);
 	lruvec = tab_s4_anon_swap_lruvec(page, zone);
 	lruvec->reclaim_stat.anon_refault_activations++;
+#ifdef CONFIG_TAB_S4_STAGE6B
+	tab_s4_stage6b_refault_locked(lruvec, false);
+#endif
 	spin_unlock_irq(&zone->lru_lock);
 	rcu_read_unlock();
 }
