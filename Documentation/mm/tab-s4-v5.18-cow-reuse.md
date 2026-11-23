@@ -1,7 +1,7 @@
 # Tab S4 Linux 4.4.302: Linux 5.18 anonymous COW reuse experiment
 
 ## Scope and origin
-Branch: `experiment/v5.18-cow-reuse-stage5`. Based on the modified Stage 5 branch; Stage 5 itself is unchanged.
+Branch: `experiment/v5.18-cow-reuse-stage5`. Based on the modified Stage 5 branch; Stage 5 itself is unchanged. The contemporary Stage 5 source already contained a dormant `CONFIG_TAB_S4_V518_COW_REUSE` implementation in `mm/memory.c`, but its WiFi defconfig and `mm/Kconfig` did not expose or enable that symbol. This branch consolidates the dormant code, adds a conservative locked mapcount check, defines its Kconfig option and enables it for WiFi.
 Upstream references:
 - 53a05ad9f21d858d24f76d12b3e990405f2036d1: optimize do_wp_page() for exclusive pages in swapcache.
 - d4c470970d45c863fafc757521a82be2f80b1232: optimize do_wp_page() for fresh pages in local LRU pagevecs.
