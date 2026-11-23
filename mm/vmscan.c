@@ -52,6 +52,7 @@
 #include <linux/tab_s4_stage6b.h>
 #endif
 #ifdef CONFIG_TAB_S4_STAGE6C
+#include <linux/ktime.h>
 #include <linux/tab_s4_stage6c.h>
 #endif
 
@@ -3951,6 +3952,7 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 	unsigned long requested = 0, reclaimed = 0;
 	unsigned long file_requested = 0, anon_requested = 0;
 	unsigned long budget;
+	u64 start_ns;
 	int i;
 
 	if (!tab_s4_stage6c_claim())
@@ -3965,6 +3967,8 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 
 	budget = clamp_t(unsigned long,
 		READ_ONCE(tab_s4_stage6c_budget), 16, 128);
+	sc.nr_to_reclaim = budget;
+	start_ns = ktime_get_ns();
 	for (i = pgdat->nr_zones - 1; i >= 0 && requested < budget; i--) {
 		struct zone *zone = pgdat->node_zones + i;
 		struct mem_cgroup *memcg;
@@ -4056,7 +4060,8 @@ next_memcg:
 	}
 done:
 	tab_s4_stage6c_record(requested, reclaimed,
-				file_requested, anon_requested);
+				file_requested, anon_requested,
+				ktime_get_ns() - start_ns);
 }
 #endif
 
