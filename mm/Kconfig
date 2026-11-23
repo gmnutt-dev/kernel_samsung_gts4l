@@ -744,6 +744,16 @@ config TAB_S4_V59_CACHE_TRIM
 	  cache remains and no new file workingset activation was
 	  observed in the previous reclaim cycle.
 
+config TAB_S4_V518_COW_REUSE
+	bool "Tab S4 Linux 5.18 conservative anonymous COW page reuse"
+	depends on MMU && SWAP
+	default n
+	help
+	  Permit a write fault to reuse an anonymous page with a removable
+	  swapcache reference, and drain local LRU pagevec references when
+	  needed. Retain the legacy locked single-map/single-ref checks.
+	  This does not import PageAnonExclusive or folio infrastructure.
+
 config TAB_S4_V59_ANON_WORKINGSET
 	bool "Tab S4 Linux 5.9 anonymous swap refault tracking"
 	depends on SWAP && TAB_S4_V59_REFAULT_DEACTIVATE && TAB_S4_V59_RECLAIM_COST
