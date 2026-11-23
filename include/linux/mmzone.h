@@ -245,6 +245,13 @@ struct zone_reclaim_stat {
 	unsigned long		anon_refault_activations;
 	unsigned long		anon_refault_seen;
 #endif
+#ifdef CONFIG_TAB_S4_STAGE6B
+	/* Bounded activity, independently decaying per anon/file lruvec. */
+	u8			stage6b_fast[2];
+	u8			stage6b_slow[2];
+	unsigned long		stage6b_fast_jiffies[2];
+	unsigned long		stage6b_slow_jiffies[2];
+#endif
 };
 
 struct lruvec {
