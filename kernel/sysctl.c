@@ -111,6 +111,9 @@ extern unsigned int core_pipe_limit;
 #endif
 extern int pid_max;
 extern int extra_free_kbytes;
+#ifdef CONFIG_TAB_S4_STAGE6B
+#include <linux/tab_s4_stage6b.h>
+#endif
 #ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
 extern int watermark_scale_factor;
 static int tab_s4_wmark_scale_min = 1;
@@ -1778,6 +1781,17 @@ static struct ctl_table vm_table[] = {
 		.extra2		= &one_hundred,
 #endif
 	},
+#ifdef CONFIG_TAB_S4_STAGE6B
+	{
+		.procname	= "tab_s4_stage6b_protection",
+		.data		= &tab_s4_stage6b_protection,
+		.maxlen		= sizeof(tab_s4_stage6b_protection),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif
 #ifdef CONFIG_HUGETLB_PAGE
 	{
 		.procname	= "nr_hugepages",
