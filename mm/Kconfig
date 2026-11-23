@@ -783,6 +783,15 @@ config TAB_S4_V59_RECLAIM_COST
 	  and balance anonymous/file reclaim using measured costs.
 	  Legacy scan balancing remains available when disabled.
 
+config TAB_S4_STAGE6A
+	bool "Tab S4 Stage 6A reclaim latency diagnostics (observation only)"
+	depends on PROC_FS && MMU
+	default n
+	help
+	  Record direct reclaim and kswapd duration histograms and a small
+	  set of cumulative counters in /proc/tab_s4_stage6a.
+	  Does not modify reclaim decisions, swap, ZRAM or LRU behavior.
+
 config BALANCE_ANON_FILE_RECLAIM
 	bool "During reclaim treat anon and file backed pages equally"
 	depends on SWAP
