@@ -61,6 +61,10 @@
 #include <linux/string.h>
 #include <linux/dma-debug.h>
 #include <linux/debugfs.h>
+#ifdef CONFIG_TAB_S4_V518_COW_DIAGNOSTICS
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#endif
 #include <linux/userfaultfd_k.h>
 
 #include <asm/io.h>
@@ -2144,6 +2148,56 @@ static inline int wp_page_reuse(struct mm_struct *mm,
  *   held to the old page, as well as updating the rmap.
  * - In any case, unlock the PTL and drop the reference we took to the old page.
  */
+#ifdef CONFIG_TAB_S4_V518_COW_DIAGNOSTICS
+/*
+ * Lifetime monotonic global counters. Diagnostic increments must not
+ * allocate memory or take locks on the page fault path.
+ */
+static atomic64_t tab_cow_copy = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_zero_copy = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_reuse = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_swap_attempt = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_swap_released = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_pagevec_drain = ATOMIC64_INIT(0);
+static atomic64_t tab_cow_copy_fallback = ATOMIC64_INIT(0);
+
+static int tab_cow_diag_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "cow_copy %lld\\n", (long long)atomic64_read(&tab_cow_copy));
+	seq_printf(m, "cow_zero_copy %lld\\n", (long long)atomic64_read(&tab_cow_zero_copy));
+	seq_printf(m, "cow_reuse %lld\\n", (long long)atomic64_read(&tab_cow_reuse));
+	seq_printf(m, "cow_swap_attempt %lld\\n", (long long)atomic64_read(&tab_cow_swap_attempt));
+	seq_printf(m, "cow_swap_released %lld\\n", (long long)atomic64_read(&tab_cow_swap_released));
+	seq_printf(m, "cow_pagevec_drain %lld\\n", (long long)atomic64_read(&tab_cow_pagevec_drain));
+	seq_printf(m, "cow_copy_fallback %lld\\n", (long long)atomic64_read(&tab_cow_copy_fallback));
+	return 0;
+}
+
+static int tab_cow_diag_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, tab_cow_diag_show, NULL);
+}
+
+static const struct file_operations tab_cow_diag_fops = {
+	.owner = THIS_MODULE,
+	.open = tab_cow_diag_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int __init tab_cow_diag_init(void)
+{
+	if (!proc_create("tab_s4_cow", 0444, NULL, &tab_cow_diag_fops))
+		pr_warn("Tab S4 COW: unable to create /proc/tab_s4_cow\\n");
+	return 0;
+}
+late_initcall(tab_cow_diag_init);
+#define TAB_COW_COUNT(name) atomic64_inc(&tab_cow_##name)
+#else
+#define TAB_COW_COUNT(name) do { } while (0)
+#endif
+
 static int wp_page_copy(struct mm_struct *mm, struct vm_area_struct *vma,
 			unsigned long address, pte_t *page_table, pmd_t *pmd,
 			pte_t orig_pte, struct page *old_page)
@@ -2239,6 +2293,9 @@ static int wp_page_copy(struct mm_struct *mm, struct vm_area_struct *vma,
 		/* Free the old page.. */
 		new_page = old_page;
 		page_copied = 1;
+		TAB_COW_COUNT(copy);
+		if (is_zero_pfn(pte_pfn(orig_pte)))
+			TAB_COW_COUNT(zero_copy);
 	} else {
 		mem_cgroup_cancel_charge(new_page, memcg);
 	}
@@ -2408,14 +2465,19 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		 */
 		if (PageKsm(old_page) || page_count(old_page) > 3)
 			goto copy;
-		if (!PageLRU(old_page))
+		if (!PageLRU(old_page)) {
+			TAB_COW_COUNT(pagevec_drain);
 			lru_add_drain();
+		}
 		if (page_count(old_page) > 1 + PageSwapCache(old_page))
 			goto copy;
 		if (!trylock_page(old_page))
 			goto copy;
-		if (PageSwapCache(old_page))
-			try_to_free_swap(old_page);
+		if (PageSwapCache(old_page)) {
+			TAB_COW_COUNT(swap_attempt);
+			if (try_to_free_swap(old_page))
+				TAB_COW_COUNT(swap_released);
+		}
 #else
 		/* PageKsm() doesn't necessarily raise the page refcount */
 		if (PageKsm(old_page) || page_count(old_page) != 1)
@@ -2434,6 +2496,7 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		 * safely make the existing mapping writable without copying.
 		 */
 		unlock_page(old_page);
+		TAB_COW_COUNT(reuse);
 		wp_page_reuse(mm, vma, address, page_table, ptl,
 			      orig_pte, old_page, 0, 0);
 		return VM_FAULT_WRITE;
@@ -2443,6 +2506,7 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 				      ptl, orig_pte, old_page);
 	}
 copy:
+	TAB_COW_COUNT(copy_fallback);
 	/*
 	 * Ok, we need to copy. Oh, well..
 	 */
