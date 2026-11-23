@@ -88,8 +88,9 @@ is disabled. For clean comparable observations, reboot between test
 conditions, start SimCity from the same initial state, and use the same
 background app set and `lmkd` properties. Compare at least:
 
-- `pgscan_direct`, `pgscan_kswapd`, `pgsteal_direct`, `pgsteal_kswapd`
-  (including the Stage 5 LMKD aggregate names),
+- Stage 5 aggregate `pgscan_direct`, `pgscan_kswapd`, `pgrefill`;
+  per-zone `pgsteal_direct_*` and `pgsteal_kswapd_*` (the Stage 5 patch
+  does not provide aggregate `pgsteal` aliases),
 - `allocstall`, file/anon workingset refault and activation rates;
 - `pswpin`, `pswpout`, zRAM usage and free logical swap slots;
 - PSI `some/full` and any ANR/OOM/LMKD kill events;
