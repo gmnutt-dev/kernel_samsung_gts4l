@@ -63,6 +63,7 @@
 #include <linux/debugfs.h>
 #ifdef CONFIG_TAB_S4_V518_COW_DIAGNOSTICS
 #include <linux/proc_fs.h>
+#include <linux/module.h>
 #include <linux/seq_file.h>
 #endif
 #include <linux/userfaultfd_k.h>
@@ -2163,13 +2164,13 @@ static atomic64_t tab_cow_copy_fallback = ATOMIC64_INIT(0);
 
 static int tab_cow_diag_show(struct seq_file *m, void *v)
 {
-	seq_printf(m, "cow_copy %lld\\n", (long long)atomic64_read(&tab_cow_copy));
-	seq_printf(m, "cow_zero_copy %lld\\n", (long long)atomic64_read(&tab_cow_zero_copy));
-	seq_printf(m, "cow_reuse %lld\\n", (long long)atomic64_read(&tab_cow_reuse));
-	seq_printf(m, "cow_swap_attempt %lld\\n", (long long)atomic64_read(&tab_cow_swap_attempt));
-	seq_printf(m, "cow_swap_released %lld\\n", (long long)atomic64_read(&tab_cow_swap_released));
-	seq_printf(m, "cow_pagevec_drain %lld\\n", (long long)atomic64_read(&tab_cow_pagevec_drain));
-	seq_printf(m, "cow_copy_fallback %lld\\n", (long long)atomic64_read(&tab_cow_copy_fallback));
+	seq_printf(m, "cow_copy %lld\n", (long long)atomic64_read(&tab_cow_copy));
+	seq_printf(m, "cow_zero_copy %lld\n", (long long)atomic64_read(&tab_cow_zero_copy));
+	seq_printf(m, "cow_reuse %lld\n", (long long)atomic64_read(&tab_cow_reuse));
+	seq_printf(m, "cow_swap_attempt %lld\n", (long long)atomic64_read(&tab_cow_swap_attempt));
+	seq_printf(m, "cow_swap_released %lld\n", (long long)atomic64_read(&tab_cow_swap_released));
+	seq_printf(m, "cow_pagevec_drain %lld\n", (long long)atomic64_read(&tab_cow_pagevec_drain));
+	seq_printf(m, "cow_copy_fallback %lld\n", (long long)atomic64_read(&tab_cow_copy_fallback));
 	return 0;
 }
 
@@ -2189,7 +2190,7 @@ static const struct file_operations tab_cow_diag_fops = {
 static int __init tab_cow_diag_init(void)
 {
 	if (!proc_create("tab_s4_cow", 0444, NULL, &tab_cow_diag_fops))
-		pr_warn("Tab S4 COW: unable to create /proc/tab_s4_cow\\n");
+		pr_warn("Tab S4 COW: unable to create /proc/tab_s4_cow\n");
 	return 0;
 }
 late_initcall(tab_cow_diag_init);
