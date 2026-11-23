@@ -1,6 +1,6 @@
 # Samsung Galaxy Tab S4 SM-T830: Stage 5 Linux 5.9-inspired anonymous swap refault and reclaim backport
 
-**Status:** committed source, not yet natively compiled, flashed, or tested. The known-booting Stage 3 Hotfix 1 branch is unchanged.
+**Historical Stage 5 status:** original source-stage note, superseded by subsequent experimental builds. This integration branch requires its own native compilation and on-device tests. The separate Stage 3 Hotfix 1 branch is unchanged.
 
 ## Why this is needed
 
@@ -38,7 +38,7 @@ This is an intentionally constrained backport. It is **not a full upstream 5.9 X
 - `CONFIG_DIRECT_RECLAIM_FILE_PAGES_ONLY` explicitly **not set** in the Wi-Fi defconfig, and the build kit requires it to remain disabled in generated and embedded configurations. It was also already Kconfig-ineligible because its original definition `depends on ZSWAP`, while ZSWAP is disabled; the explicit state prevents ambiguity.
 - `CONFIG_TAB_S4_V59_RECLAIM_RETRY=y` adds a yielding point and a **single** failed-reclaim forced-deactivation retry when free swap is > `SWAP_CLUSTER_MAX` pages. This is intentionally more conservative than upstream at swap exhaustion.
 - `CONFIG_TAB_S4_V59_WATERMARK_SCALE=y` exposes `/proc/sys/vm/watermark_scale_factor`; default 50 means 0.5% of each zone's managed pages as the minimum background reclaim watermark gap. The legacy min/4 gap and the Samsung `extra_free_kbytes` contribution remain respected. The upstream v5.9 baseline default is 10; 50 is an experimental device-specific setting and can be changed live.
-- **`CONFIG_TAB_S4_V59_CACHE_TRIM=y` stays enabled**, together with the original Stage 3 Hotfix 1 active-file protection when swap slots are nearly depleted. ZSWAP, ZRAM writeback and ZRAM size are unchanged.
+- **`CONFIG_TAB_S4_V59_CACHE_TRIM=y` stays enabled**. The Stage 3 Hotfix 1 active-file swap-exhaustion guard was later explicitly removed from Stage 5; other Stage 5 anonymous retry checks still have swap availability guards. ZSWAP, ZRAM writeback and ZRAM size are unchanged.
 
 ## Engineering validation and test matrix
 
