@@ -754,6 +754,15 @@ config TAB_S4_V518_COW_REUSE
 	  needed. Retain the legacy locked single-map/single-ref checks.
 	  This does not import PageAnonExclusive or folio infrastructure.
 
+config TAB_S4_V518_COW_DIAGNOSTICS
+	bool "Tab S4 COW diagnostic counters in /proc/tab_s4_cow"
+	depends on TAB_S4_V518_COW_REUSE && PROC_FS
+	default n
+	help
+	  Read-only lifetime atomic64 counters for successful COW copies,
+	  anonymous page reuse, swapcache releases, and local LRU drains.
+	  Diagnostic instrumentation adds overhead to the page fault path.
+
 config TAB_S4_V59_ANON_WORKINGSET
 	bool "Tab S4 Linux 5.9 anonymous swap refault tracking"
 	depends on SWAP && TAB_S4_V59_REFAULT_DEACTIVATE && TAB_S4_V59_RECLAIM_COST
