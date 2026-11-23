@@ -39,7 +39,9 @@ The additional work has these safeguards:
 2. A candidate zone must already satisfy its **normal high watermark**,
    but be within a small extra band above it (32–128 pages).
 3. Samsung memory-boost mode and unreclaimable/empty zones are skipped.
-4. Inspect at most eight memory-cgroup LRU vectors per candidate zone.
+4. Inspect at most eight memory-cgroup LRU vectors per candidate zone,
+   preserving the normal `memory.low` skip and rejecting zones with
+   excessive concurrent page isolation.
 5. Read Stage 6B's separate anonymous/file activity scores under the
    existing zone LRU lock. Only a relatively cool inactive list (activity
    score <=12 of at most 25) may be selected.
