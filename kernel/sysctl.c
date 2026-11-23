@@ -114,6 +114,11 @@ extern int extra_free_kbytes;
 #ifdef CONFIG_TAB_S4_STAGE6B
 #include <linux/tab_s4_stage6b.h>
 #endif
+#ifdef CONFIG_TAB_S4_STAGE6C
+#include <linux/tab_s4_stage6c.h>
+static int stage6c_budget_min = 16;
+static int stage6c_budget_max = 128;
+#endif
 #ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
 extern int watermark_scale_factor;
 static int tab_s4_wmark_scale_min = 1;
@@ -1790,6 +1795,26 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 		.extra2		= &one,
+	},
+#endif
+#ifdef CONFIG_TAB_S4_STAGE6C
+	{
+		.procname	= "tab_s4_stage6c_enable",
+		.data		= &tab_s4_stage6c_enable,
+		.maxlen		= sizeof(tab_s4_stage6c_enable),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "tab_s4_stage6c_budget",
+		.data		= &tab_s4_stage6c_budget,
+		.maxlen		= sizeof(tab_s4_stage6c_budget),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &stage6c_budget_min,
+		.extra2		= &stage6c_budget_max,
 	},
 #endif
 #ifdef CONFIG_HUGETLB_PAGE
