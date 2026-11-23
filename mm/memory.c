@@ -2400,6 +2400,30 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	 * not dirty accountable.
 	 */
 	if (PageAnon(old_page)) {
+#ifdef CONFIG_TAB_S4_V518_COW_REUSE
+		/*
+		 * Linux 5.18: a sole mapped anonymous page may have one more
+		 * reference from swapcache or a local LRU pagevec. Drain only
+		 * the local pending LRU additions, then test again.
+		 *
+		 * PageKsm does not necessarily increment the refcount.
+		 * Never reuse while another reference/pin remains.
+		 */
+		if (PageKsm(old_page) || page_count(old_page) > 3)
+			goto copy;
+		if (!PageLRU(old_page))
+			lru_add_drain();
+		if (page_count(old_page) > 1 + PageSwapCache(old_page))
+			goto copy;
+		if (!trylock_page(old_page))
+			goto copy;
+		if (PageSwapCache(old_page))
+			try_to_free_swap(old_page);
+		if (PageKsm(old_page) || page_count(old_page) != 1) {
+			unlock_page(old_page);
+			goto copy;
+		}
+#else
 		/* PageKsm() doesn't necessarily raise the page refcount */
 		if (PageKsm(old_page) || page_count(old_page) != 1)
 			goto copy;
@@ -2409,10 +2433,10 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			unlock_page(old_page);
 			goto copy;
 		}
+#endif
 		/*
-		 * Ok, we've got the only map reference, and the only
-		 * page count reference, and the page is locked,
-		 * it's dark out, and we're wearing sunglasses. Hit it.
+		 * We have the only page reference and the page is locked:
+		 * safely make the existing mapping writable without copying.
 		 */
 		unlock_page(old_page);
 		wp_page_reuse(mm, vma, address, page_table, ptl,
