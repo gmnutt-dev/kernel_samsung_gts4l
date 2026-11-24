@@ -50,6 +50,8 @@
 #ifdef DEBUG_DMA_DONE
 #include <asm/barrier.h>
 #include <linux/moduleparam.h>
+#include <linux/jiffies.h>
+#include <linux/timer.h>
 #include <wma_api.h>
 #endif
 #include <pktlog_ac_fmt.h>
@@ -511,11 +513,25 @@ static void s6_rx_arm_retry(struct htt_pdev_t *pdev)
 	if (READ_ONCE(s6_refill) &&
 	    pdev->rx_ring.fill_cnt >= pdev->rx_ring.fill_level / 2)
 		delay = min_t(unsigned int, delay * 4, 200);
-	qdf_timer_stop(&pdev->rx_ring.refill_retry_timer);
+	/* Never postpone an already earlier deadline on repeated failures.
+	 * QDF's Linux timer is a timer_list; mod_timer also avoids add_timer
+	 * on an already pending timer.
+	 */
+	if (READ_ONCE(s6_refill)) {
+		qdf_timer_t *timer = &pdev->rx_ring.refill_retry_timer;
+		unsigned long expires = jiffies + msecs_to_jiffies(delay);
+
+		if (timer_pending(timer) &&
+		    time_before_eq(READ_ONCE(timer->expires), expires))
+			return;
+		mod_timer(timer, expires);
+	} else {
+		qdf_timer_stop(&pdev->rx_ring.refill_retry_timer);
+		qdf_timer_start(&pdev->rx_ring.refill_retry_timer, delay);
+	}
 	pdev->refill_retry_timer_starts++;
 	s6_rx_retry_arms++;
 	s6_rx_retry_ms = delay;
-	qdf_timer_start(&pdev->rx_ring.refill_retry_timer, delay);
 }
 
 /* full_reorder_offload case: this function is called with lock held */
@@ -3874,14 +3890,17 @@ int htt_rx_attach(struct htt_pdev_t *pdev)
 #endif
 	htt_rx_dbg_rxbuf_init(pdev);
 	if (READ_ONCE(s6_refill) && pdev->cfg.is_full_reorder_offload) {
-		int filled = htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
+		int filled;
 
+		qdf_spin_lock_bh(&pdev->rx_ring.refill_lock);
+		filled = htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
 		if (filled < pdev->rx_ring.fill_level) {
 			qdf_atomic_add(pdev->rx_ring.fill_level - filled,
 				       &pdev->rx_ring.refill_debt);
 			s6_rx_debt = qdf_atomic_read(&pdev->rx_ring.refill_debt);
 			s6_rx_arm_retry(pdev);
 		}
+		qdf_spin_unlock_bh(&pdev->rx_ring.refill_lock);
 	} else {
 		htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
 	}

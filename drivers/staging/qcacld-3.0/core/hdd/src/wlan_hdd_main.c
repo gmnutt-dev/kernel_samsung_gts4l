@@ -7493,6 +7493,8 @@ static void hdd_pld_request_bus_bandwidth(hdd_context_t *hdd_ctx,
 	     next_vote_level == PLD_BUS_WIDTH_NONE)) {
 		if (++hdd_ctx->s6_bw_down < 2)
 			next_vote_level = hdd_ctx->cur_vote_level;
+		else
+			hdd_ctx->s6_bw_down = 0;
 	} else {
 		hdd_ctx->s6_bw_down = 0;
 	}
@@ -7502,7 +7504,8 @@ static void hdd_pld_request_bus_bandwidth(hdd_context_t *hdd_ctx,
 		bool high = next_vote_level != PLD_BUS_WIDTH_LOW &&
 			(!READ_ONCE(s6_affinity) ||
 			 next_vote_level != PLD_BUS_WIDTH_NONE);
-		bool change = hdd_ctx->hbw_requested != high;
+		bool change = hdd_ctx->hbw_requested != high ||
+			hdd_ctx->s6_affinity_last != READ_ONCE(s6_affinity);
 
 		hdd_ctx->s6_affinity_last = READ_ONCE(s6_affinity);
 		s6_bw_votes++;
