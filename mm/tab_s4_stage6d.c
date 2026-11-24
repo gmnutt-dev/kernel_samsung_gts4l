@@ -32,7 +32,6 @@ int tab_s4_stage6d_mode;
 /* Deliberately below 6B's 25% cap by default; 0..25 via sysctl. */
 int tab_s4_stage6d_cap = 20;
 
-static atomic64_t refault_events[2];
 static atomic64_t refault_credits[2];
 static atomic64_t renewal_events[2];
 static atomic64_t rotated_events[2];
@@ -128,8 +127,6 @@ void tab_s4_stage6d_refault_locked(struct lruvec *lruvec, bool file)
         if (previous && time_after(now, previous + STAGE6D_RECENT_WINDOW))
                 atomic64_inc(&renewal_events[type]);
         st->stage6d_last_refault[type] = now;
-
-        atomic64_inc(&refault_events[type]);
 
         /*
          * Avoid having a burst of hundreds of refaults instantly saturate
@@ -258,13 +255,12 @@ static int stage6d_show(struct seq_file *m, void *ignored)
         seq_puts(m, "pressure high_swap_free_below_25pct\n");
         seq_puts(m, "fast_decay_seconds_by_pressure 2_1_0.5\n");
         seq_puts(m, "slow_decay_seconds_by_pressure 16_8_4\n");
-        seq_puts(m, "refault_credit_min_interval_ms 250_at_HZ1000\n");
+        seq_printf(m, "refault_credit_interval_jiffies %lu\n",
+                   STAGE6D_REF_CREDIT_INTERVAL);
         seq_puts(m, "context_refault_window_seconds 2\n");
         seq_printf(m, "mode %d\n", READ_ONCE(tab_s4_stage6d_mode));
         seq_printf(m, "max_scan_reduction_percent %d\n",
                    READ_ONCE(tab_s4_stage6d_cap));
-        SHOW(m, "anon_refault_events", refault_events[0]);
-        SHOW(m, "file_refault_events", refault_events[1]);
         SHOW(m, "anon_refault_credits", refault_credits[0]);
         SHOW(m, "file_refault_credits", refault_credits[1]);
         SHOW(m, "anon_renewal_hints", renewal_events[0]);
