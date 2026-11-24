@@ -81,7 +81,8 @@ void tab_s4_stage6b_refault_locked(struct lruvec *lruvec, bool file)
                                         stat->stage6b_slow[type] + 1U);
         atomic64_inc(&refaults[type]);
 #ifdef CONFIG_TAB_S4_STAGE6D
-        tab_s4_stage6d_refault_locked(lruvec, file);
+        if (READ_ONCE(tab_s4_stage6d_mode))
+                tab_s4_stage6d_refault_locked(lruvec, file);
 #endif
 }
 
@@ -93,7 +94,8 @@ void tab_s4_stage6b_rotation_locked(struct lruvec *lruvec, bool file,
 
         stage6b_age_locked(stat, type);
 #ifdef CONFIG_TAB_S4_STAGE6D
-        tab_s4_stage6d_rotation_locked(lruvec, file, scanned, rotated);
+        if (READ_ONCE(tab_s4_stage6d_mode))
+                tab_s4_stage6d_rotation_locked(lruvec, file, scanned, rotated);
 #endif
         /* Only actual referenced active pages count as a positive signal. */
         if (scanned < STAGE6B_MIN_SAMPLE || rotated < (scanned + 1) / 2)
@@ -111,7 +113,8 @@ void tab_s4_stage6b_reclaim_locked(struct lruvec *lruvec, bool file,
 
         stage6b_age_locked(stat, type);
 #ifdef CONFIG_TAB_S4_STAGE6D
-        tab_s4_stage6d_reclaim_locked(lruvec, file, scanned, reclaimed);
+        if (READ_ONCE(tab_s4_stage6d_mode))
+                tab_s4_stage6d_reclaim_locked(lruvec, file, scanned, reclaimed);
 #endif
         /* Efficient reclaim counters repeated, stale high-activity signals. */
         if (scanned < STAGE6B_MIN_SAMPLE ||
