@@ -122,6 +122,7 @@ static int stage6c_budget_max = 128;
 #ifdef CONFIG_TAB_S4_STAGE6D
 #include <linux/tab_s4_stage6d.h>
 static int stage6d_max_cap = 25;
+static int stage6d_max_mode = 2;
 #endif
 #ifdef CONFIG_TAB_S4_V59_WATERMARK_SCALE
 extern int watermark_scale_factor;
@@ -1829,7 +1830,7 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-		.extra2		= &one,
+		.extra2		= &stage6d_max_mode,
 	},
 	{
 		.procname	= "tab_s4_stage6d_cap",
