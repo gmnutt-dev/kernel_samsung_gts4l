@@ -55,6 +55,9 @@
 #include <linux/ktime.h>
 #include <linux/tab_s4_stage6c.h>
 #endif
+#ifdef CONFIG_TAB_S4_STAGE6D
+#include <linux/tab_s4_stage6d.h>
+#endif
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -2411,6 +2414,9 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 	int pass;
 #ifdef CONFIG_TAB_S4_STAGE6B
 	unsigned int stage6b_protection[2] = { 0, 0 };
+#ifdef CONFIG_TAB_S4_STAGE6D
+	bool stage6d_selected = !!READ_ONCE(tab_s4_stage6d_mode);
+#endif
 #endif
 
 	/*
@@ -2645,7 +2651,12 @@ out:
 	    get_nr_swap_pages() > max_t(long, SWAP_CLUSTER_MAX * 8,
 					 total_swap_pages / 16)) {
 		spin_lock_irq(&zone->lru_lock);
-		tab_s4_stage6b_percent_locked(lruvec, stage6b_protection);
+#ifdef CONFIG_TAB_S4_STAGE6D
+		if (stage6d_selected)
+			tab_s4_stage6d_percent_locked(lruvec, stage6b_protection);
+		else
+#endif
+			tab_s4_stage6b_percent_locked(lruvec, stage6b_protection);
 		spin_unlock_irq(&zone->lru_lock);
 	}
 #endif
@@ -2696,7 +2707,12 @@ out:
 					scan * stage6b_protection[file] / 100;
 
 				scan -= deferred;
-				tab_s4_stage6b_deferred(file, deferred);
+#ifdef CONFIG_TAB_S4_STAGE6D
+				if (stage6d_selected)
+					tab_s4_stage6d_deferred(file, deferred);
+				else
+#endif
+					tab_s4_stage6b_deferred(file, deferred);
 			}
 #endif
 			*lru_pages += size;
@@ -4010,7 +4026,13 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 
 			lruvec = mem_cgroup_zone_lruvec(zone, memcg);
 			spin_lock_irq(&zone->lru_lock);
-			tab_s4_stage6b_percent_locked(lruvec, activity);
+#ifdef CONFIG_TAB_S4_STAGE6D
+			if (READ_ONCE(tab_s4_stage6d_mode) &&
+			    READ_ONCE(tab_s4_stage6b_protection))
+				tab_s4_stage6d_percent_locked(lruvec, activity);
+			else
+#endif
+				tab_s4_stage6b_percent_locked(lruvec, activity);
 			spin_unlock_irq(&zone->lru_lock);
 
 			/* Prefer the cooler inactive class, never active pages. */
