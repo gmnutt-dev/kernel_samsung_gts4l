@@ -2,8 +2,8 @@
 /*
  * Tab S4 Stage 6D: derived context from live memory signals.
  *
- * Same LRU vectors as 6B, but independent bounded history so mode 0
- * preserves 6B scan decisions. No per-page metadata, address ownership
+ * Same LRU vectors as 6B, with independent history so mode 0 disables
+ * all 6D event work and mode 1 observes without affecting 6B decisions. No per-page metadata, address ownership
  * tables, per-access tracing, timers, allocations or extra workers.
  *
  * The value is a scanning PREFERENCE, not a refcount or page pin.
@@ -27,7 +27,7 @@
 #define STAGE6D_RECENT_WINDOW   (2UL * HZ)
 #define STAGE6D_MIN_SAMPLE      16UL
 
-/* Zero = observation-only, retaining all existing 6B/6C decisions. */
+/* 0 = off (Stage 6B only), 1 = 6D shadow, 2 = 6D scan policy. */
 int tab_s4_stage6d_mode;
 /* Deliberately below 6B's 25% cap by default; 0..25 via sysctl. */
 int tab_s4_stage6d_cap = 20;
@@ -247,8 +247,9 @@ void tab_s4_stage6d_deferred(bool file, unsigned long pages)
 static int stage6d_show(struct seq_file *m, void *ignored)
 {
         seq_puts(m, "version 1\n");
-        seq_puts(m, "mode_0 shadow_stage6b_unchanged\n");
-        seq_puts(m, "mode_1 context_scanning_override\n");
+        seq_puts(m, "mode_0 disabled_stage6b_unchanged\n");
+        seq_puts(m, "mode_1 shadow_stage6b_unchanged\n");
+        seq_puts(m, "mode_2 context_scanning_override\n");
         seq_puts(m, "scope lruvec_anon_file\n");
         seq_puts(m, "pressure relaxed_swap_free_above_50pct\n");
         seq_puts(m, "pressure medium_swap_free_25_to_50pct\n");
