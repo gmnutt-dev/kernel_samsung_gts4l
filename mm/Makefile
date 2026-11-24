@@ -45,6 +45,7 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 obj-y += init-mm.o
 obj-$(CONFIG_TAB_S4_STAGE6B) += tab_s4_stage6b.o
 obj-$(CONFIG_TAB_S4_STAGE6C) += tab_s4_stage6c.o
+obj-$(CONFIG_TAB_S4_STAGE6D) += tab_s4_stage6d.o
 
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o
