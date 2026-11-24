@@ -252,6 +252,16 @@ struct zone_reclaim_stat {
 	unsigned long		stage6b_fast_jiffies[2];
 	unsigned long		stage6b_slow_jiffies[2];
 #endif
+#ifdef CONFIG_TAB_S4_STAGE6D
+	/* 6D keeps independent history so disabling it preserves Stage 6B. */
+	u8			stage6d_fast[2];
+	u8			stage6d_slow[2];
+	u8			stage6d_quality[2];
+	unsigned long		stage6d_fast_jiffies[2];
+	unsigned long		stage6d_slow_jiffies[2];
+	unsigned long		stage6d_last_credit[2];
+	unsigned long		stage6d_last_refault[2];
+#endif
 };
 
 struct lruvec {
