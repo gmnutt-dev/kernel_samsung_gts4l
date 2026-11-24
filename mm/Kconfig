@@ -797,8 +797,9 @@ config TAB_S4_STAGE6D
 	  Normal and emergency reclaim, page eligibility, and cgroup protection
 	  remain unchanged. No page pinning, active access tracing, timers or
 	  process-to-page address tables.
-	  Default OFF, so the compiled kernel runs the existing Stage 6B
-	  policy until vm.tab_s4_stage6d_mode is set to 1.
+	  Default OFF. vm.tab_s4_stage6d_mode 0=off, 1=shadow telemetry,
+	  2=contextual scan policy. Mode 0 leaves Stage 6B event handling
+	  unchanged apart from a lightweight mode check.
 
 config TAB_S4_LMKD_VMSTAT_COMPAT
 	bool "Tab S4 Android lmkd aggregate /proc/vmstat reclaim counters"
