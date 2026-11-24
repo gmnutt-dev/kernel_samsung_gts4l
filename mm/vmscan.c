@@ -2415,7 +2415,7 @@ static void get_scan_count(struct lruvec *lruvec, int swappiness,
 #ifdef CONFIG_TAB_S4_STAGE6B
 	unsigned int stage6b_protection[2] = { 0, 0 };
 #ifdef CONFIG_TAB_S4_STAGE6D
-	bool stage6d_selected = !!READ_ONCE(tab_s4_stage6d_mode);
+	bool stage6d_selected = (READ_ONCE(tab_s4_stage6d_mode) == 2);
 #endif
 #endif
 
@@ -4027,7 +4027,7 @@ static void tab_s4_stage6c_kswapd_step(pg_data_t *pgdat)
 			lruvec = mem_cgroup_zone_lruvec(zone, memcg);
 			spin_lock_irq(&zone->lru_lock);
 #ifdef CONFIG_TAB_S4_STAGE6D
-			if (READ_ONCE(tab_s4_stage6d_mode) &&
+			if (READ_ONCE(tab_s4_stage6d_mode) == 2 &&
 			    READ_ONCE(tab_s4_stage6b_protection))
 				tab_s4_stage6d_percent_locked(lruvec, activity);
 			else
