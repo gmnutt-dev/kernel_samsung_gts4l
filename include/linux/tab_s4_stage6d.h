@@ -8,7 +8,7 @@
 struct lruvec;
 
 #ifdef CONFIG_TAB_S4_STAGE6D
-/* 0 = observe, 1 = use Stage 6D instead of Stage 6B scan scores. */
+/* 0 = off, 1 = shadow-only, 2 = Stage 6D scan policy. */
 extern int tab_s4_stage6d_mode;
 extern int tab_s4_stage6d_cap;
 
