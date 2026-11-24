@@ -88,16 +88,22 @@ All original Stage 5 allocation, swap, zsmalloc, LMKD and Android
 ## Runtime modes
 
 Stage 6D compiles with `CONFIG_TAB_S4_STAGE6D=y` but **boots disabled**.
+Mode 0 does not even update 6D's new event scores; mode 1 collects 6D
+shadow telemetry but leaves the Stage 6B policy untouched; mode 2 applies
+6D's score policy in place of 6B's scan preference.
 
 ```sh
-# Stage 6B alone; Stage 6D records independent shadow history:
+# Stage 6B alone, without Stage 6D event score maintenance:
 su -c 'echo 0 > /proc/sys/vm/tab_s4_stage6d_mode'
 su -c 'echo 1 > /proc/sys/vm/tab_s4_stage6b_protection'
 su -c 'echo 0 > /proc/sys/vm/tab_s4_stage6c_enable'
 
+# Stage 6D shadow telemetry, with 6B decisions unchanged:
+su -c 'echo 1 > /proc/sys/vm/tab_s4_stage6d_mode'
+
 # Context-conditioned Stage 6D replacing the 6B scan preference:
 su -c 'echo 20 > /proc/sys/vm/tab_s4_stage6d_cap'
-su -c 'echo 1 > /proc/sys/vm/tab_s4_stage6d_mode'
+su -c 'echo 2 > /proc/sys/vm/tab_s4_stage6d_mode'
 
 # Immediate rollback without rebuilding:
 su -c 'echo 0 > /proc/sys/vm/tab_s4_stage6d_mode'
@@ -136,10 +142,11 @@ counters describe only 6B policy deferrals when 6D takes over.
 5. If app switching worsens, disable 6D immediately by its sysctl.
    Compare trials across at least two matching cycles.
 
-The mode-0 baseline retains exactly the Stage 6B scan-target algorithm,
-although Stage 6D score maintenance incurs a small amount of additional
-bookkeeping overhead. Changing the runtime mode does not reset the
-independent history; reboot between comparable A/B trials.
+Mode 0 retains the Stage 6B scan-target algorithm without 6D event-score
+maintenance. A cheap branch remains in each existing 6B event handler.
+Mode 1 updates the independent 6D history but applies Stage 6B scan
+preferences. Changing runtime mode does not reset independent history;
+reboot between comparable A/B trials.
 
 ## Limits and gaps
 
