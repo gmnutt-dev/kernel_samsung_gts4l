@@ -2089,6 +2089,11 @@ struct hdd_context_s {
 	/* DDR bus bandwidth compute timer
 	 */
 	qdf_mc_timer_t bus_bw_timer;
+	unsigned long s6_bw_last;
+	unsigned int s6_bw_idle;
+	unsigned int s6_bw_down;
+	bool s6_affinity_last;
+	bool s6_adaptive_last;
 	int cur_vote_level;
 	spinlock_t bus_bw_lock;
 	int cur_rx_level;

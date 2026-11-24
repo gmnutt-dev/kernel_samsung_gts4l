@@ -28,6 +28,9 @@
 #include <cds_api.h>
 #include <cds_sched.h>
 #include <linux/cpu.h>
+#include <linux/moduleparam.h>
+#include <linux/jiffies.h>
+#include <linux/math64.h>
 #include <linux/etherdevice.h>
 #include <linux/firmware.h>
 #include <wlan_hdd_tx_rx.h>
@@ -7440,6 +7443,23 @@ static inline void hdd_display_periodic_stats(hdd_context_t *hdd_ctx, bool data_
 		data_in_time_period = false;
 	}
 }
+/* Stage 6F/G/H: independent, opt-in experiments; legacy default. */
+static bool s6_affinity;
+static bool s6_adaptive;
+static unsigned long s6_bw_samples, s6_bw_idle_samples, s6_bw_votes;
+static unsigned long s6_bw_affinity_changes, s6_bw_interval_ms;
+static unsigned long s6_bw_tx, s6_bw_rx, s6_bw_vote;
+module_param_named(stage6_affinity, s6_affinity, bool, 0644);
+module_param_named(stage6_adaptive, s6_adaptive, bool, 0644);
+module_param_named(stage6_bw_samples, s6_bw_samples, ulong, 0444);
+module_param_named(stage6_bw_idle_samples, s6_bw_idle_samples, ulong, 0444);
+module_param_named(stage6_bw_votes, s6_bw_votes, ulong, 0444);
+module_param_named(stage6_bw_affinity_changes, s6_bw_affinity_changes, ulong, 0444);
+module_param_named(stage6_bw_interval_ms, s6_bw_interval_ms, ulong, 0444);
+module_param_named(stage6_bw_tx, s6_bw_tx, ulong, 0444);
+module_param_named(stage6_bw_rx, s6_bw_rx, ulong, 0444);
+module_param_named(stage6_bw_vote, s6_bw_vote, ulong, 0444);
+
 static void hdd_pld_request_bus_bandwidth(hdd_context_t *hdd_ctx,
 					  const uint64_t tx_packets,
 					  const uint64_t rx_packets)
@@ -7465,18 +7485,40 @@ static void hdd_pld_request_bus_bandwidth(hdd_context_t *hdd_ctx,
 	else
 		next_vote_level = PLD_BUS_WIDTH_NONE;
 
-	if (hdd_ctx->cur_vote_level != next_vote_level) {
+	/* Downshift only after two low samples; promote immediately. */
+	if (READ_ONCE(s6_affinity) &&
+	    (hdd_ctx->cur_vote_level == PLD_BUS_WIDTH_MEDIUM ||
+	     hdd_ctx->cur_vote_level == PLD_BUS_WIDTH_HIGH) &&
+	    (next_vote_level == PLD_BUS_WIDTH_LOW ||
+	     next_vote_level == PLD_BUS_WIDTH_NONE)) {
+		if (++hdd_ctx->s6_bw_down < 2)
+			next_vote_level = hdd_ctx->cur_vote_level;
+	} else {
+		hdd_ctx->s6_bw_down = 0;
+	}
+
+	if (hdd_ctx->cur_vote_level != next_vote_level ||
+	    hdd_ctx->s6_affinity_last != READ_ONCE(s6_affinity)) {
+		bool high = next_vote_level != PLD_BUS_WIDTH_LOW &&
+			(!READ_ONCE(s6_affinity) ||
+			 next_vote_level != PLD_BUS_WIDTH_NONE);
+		bool change = hdd_ctx->hbw_requested != high;
+
+		hdd_ctx->s6_affinity_last = READ_ONCE(s6_affinity);
+		s6_bw_votes++;
+		s6_bw_vote = next_vote_level;
 		hdd_debug("trigger level %d, tx_packets: %lld, rx_packets: %lld",
 			 next_vote_level, tx_packets, rx_packets);
 		hdd_ctx->cur_vote_level = next_vote_level;
 		vote_level_change = true;
 		pld_request_bus_bandwidth(hdd_ctx->parent_dev, next_vote_level);
-		if (next_vote_level == PLD_BUS_WIDTH_LOW) {
+		if (!high) {
 			if (hdd_ctx->hbw_requested) {
 				pld_remove_pm_qos(hdd_ctx->parent_dev);
 				hdd_ctx->hbw_requested = false;
 			}
-			if (cds_sched_handle_throughput_req(false))
+			if ((!READ_ONCE(s6_affinity) || change) &&
+			    cds_sched_handle_throughput_req(false))
 				hdd_warn("low bandwidth set rx affinity fail");
 		} else {
 			if (!hdd_ctx->hbw_requested) {
@@ -7484,9 +7526,12 @@ static void hdd_pld_request_bus_bandwidth(hdd_context_t *hdd_ctx,
 				hdd_ctx->hbw_requested = true;
 			}
 
-			if (cds_sched_handle_throughput_req(true))
+			if ((!READ_ONCE(s6_affinity) || change) &&
+			    cds_sched_handle_throughput_req(true))
 				hdd_warn("high bandwidth set rx affinity fail");
 		}
+		if (change)
+			s6_bw_affinity_changes++;
 		hdd_napi_apply_throughput_policy(hdd_ctx, tx_packets,
 						 rx_packets);
 	}
@@ -7588,6 +7633,9 @@ static void hdd_bus_bw_compute_cbk(void *priv)
 	A_STATUS ret;
 	bool connected = false;
 	uint32_t ipa_tx_packets = 0, ipa_rx_packets = 0;
+	unsigned int base_ms, next_ms, elapsed_ms;
+	unsigned long now;
+	bool ipa_active, adaptive;
 
 	if (wlan_hdd_validate_context(hdd_ctx))
 		return;
@@ -7642,7 +7690,7 @@ static void hdd_bus_bw_compute_cbk(void *priv)
 					fwd_tx_packets,
 					adapter->prev_fwd_tx_packets);
 				fwd_rx_packets_diff += HDD_BW_GET_DIFF(
-					fwd_tx_packets,
+					READ_ONCE(s6_adaptive) ? fwd_rx_packets : fwd_tx_packets,
 					adapter->prev_fwd_rx_packets);
 			}
 		}
@@ -7668,7 +7716,8 @@ static void hdd_bus_bw_compute_cbk(void *priv)
 	tx_packets += fwd_tx_packets_diff;
 	rx_packets += fwd_rx_packets_diff;
 
-	if (hdd_ipa_is_fw_wdi_actived(hdd_ctx)) {
+	ipa_active = hdd_ipa_is_fw_wdi_actived(hdd_ctx);
+	if (ipa_active) {
 		hdd_ipa_uc_stat_query(hdd_ctx, &ipa_tx_packets,
 				      &ipa_rx_packets);
 		tx_packets += (uint64_t)ipa_tx_packets;
@@ -7683,10 +7732,40 @@ static void hdd_bus_bw_compute_cbk(void *priv)
 		hdd_ipa_uc_stat_request(hdd_ctx, 2);
 	}
 
-	hdd_pld_request_bus_bandwidth(hdd_ctx, tx_packets, rx_packets);
+	/* Keep IPA's existing request cadence. Back off only on zero traffic. */
+	base_ms = max_t(unsigned int, 1,
+			hdd_ctx->config->busBandwidthComputeInterval);
+	next_ms = base_ms;
+	now = jiffies;
+	elapsed_ms = hdd_ctx->s6_bw_last ?
+		max_t(unsigned int, 1, jiffies_to_msecs(now - hdd_ctx->s6_bw_last)) :
+		base_ms;
+	hdd_ctx->s6_bw_last = now;
+	adaptive = READ_ONCE(s6_adaptive) && !ipa_active &&
+		base_ms < 500;
+	s6_bw_samples++;
+	s6_bw_tx = tx_packets;
+	s6_bw_rx = rx_packets;
+	if (!tx_packets && !rx_packets) {
+		s6_bw_idle_samples++;
+		if (hdd_ctx->s6_bw_idle < 8)
+			hdd_ctx->s6_bw_idle++;
+	} else {
+		hdd_ctx->s6_bw_idle = 0;
+	}
+	if (adaptive && hdd_ctx->s6_bw_idle >= 3)
+		next_ms = min_t(unsigned int, 500, base_ms *
+			(hdd_ctx->s6_bw_idle >= 6 ? 5 : 2));
 
-	qdf_mc_timer_start(&hdd_ctx->bus_bw_timer,
-			   hdd_ctx->config->busBandwidthComputeInterval);
+	/* All bandwidth/TCP thresholds remain expressed per base interval. */
+	if (adaptive || hdd_ctx->s6_adaptive_last) {
+		tx_packets = div64_u64(tx_packets * base_ms, elapsed_ms);
+		rx_packets = div64_u64(rx_packets * base_ms, elapsed_ms);
+	}
+	hdd_ctx->s6_adaptive_last = adaptive;
+	hdd_pld_request_bus_bandwidth(hdd_ctx, tx_packets, rx_packets);
+	s6_bw_interval_ms = next_ms;
+	qdf_mc_timer_start(&hdd_ctx->bus_bw_timer, next_ms);
 }
 
 int hdd_bus_bandwidth_init(hdd_context_t *hdd_ctx)
@@ -12396,6 +12475,9 @@ void hdd_bus_bw_compute_timer_start(hdd_context_t *hdd_ctx)
 	    qdf_mc_timer_get_current_state(&hdd_ctx->bus_bw_timer))
 		return;
 
+	hdd_ctx->s6_bw_last = jiffies;
+	hdd_ctx->s6_bw_idle = 0;
+	hdd_ctx->s6_bw_down = 0;
 	qdf_mc_timer_start(&hdd_ctx->bus_bw_timer,
 			   hdd_ctx->config->busBandwidthComputeInterval);
 	EXIT();
@@ -12409,10 +12491,14 @@ void hdd_bus_bw_compute_timer_try_start(hdd_context_t *hdd_ctx)
 	    qdf_mc_timer_get_current_state(&hdd_ctx->bus_bw_timer))
 		return;
 
-	if (hdd_any_adapter_is_assoc(hdd_ctx))
+	if (hdd_any_adapter_is_assoc(hdd_ctx)) {
+		hdd_ctx->s6_bw_last = jiffies;
+		hdd_ctx->s6_bw_idle = 0;
+		hdd_ctx->s6_bw_down = 0;
 		qdf_mc_timer_start(&hdd_ctx->bus_bw_timer,
 				   hdd_ctx->config->
 				   busBandwidthComputeInterval);
+	}
 	EXIT();
 
 }

@@ -49,6 +49,7 @@
 #include "ol_txrx_types.h"
 #ifdef DEBUG_DMA_DONE
 #include <asm/barrier.h>
+#include <linux/moduleparam.h>
 #include <wma_api.h>
 #endif
 #include <pktlog_ac_fmt.h>
@@ -484,6 +485,39 @@ htt_rx_in_ord_paddr_get(uint32_t *u32p)
 #endif
 #endif /* ENABLE_DEBUG_ADDRESS_MARKING */
 
+/* Stage 6F/H: diagnostics are cumulative, best-effort; no packet logging.
+ * The adaptive retry is deliberately conservative: do not back off when
+ * fewer than half of the target receive buffers remain.
+ */
+static bool s6_refill;
+static unsigned long s6_rx_alloc_fail, s6_rx_map_fail, s6_rx_hash_fail;
+static unsigned long s6_rx_retry_calls, s6_rx_retry_arms, s6_rx_retry_ms;
+static unsigned long s6_rx_fill, s6_rx_target, s6_rx_debt;
+module_param_named(stage6_refill, s6_refill, bool, 0644);
+module_param_named(stage6_rx_alloc_fail, s6_rx_alloc_fail, ulong, 0444);
+module_param_named(stage6_rx_map_fail, s6_rx_map_fail, ulong, 0444);
+module_param_named(stage6_rx_hash_fail, s6_rx_hash_fail, ulong, 0444);
+module_param_named(stage6_rx_retry_calls, s6_rx_retry_calls, ulong, 0444);
+module_param_named(stage6_rx_retry_arms, s6_rx_retry_arms, ulong, 0444);
+module_param_named(stage6_rx_retry_ms, s6_rx_retry_ms, ulong, 0444);
+module_param_named(stage6_rx_fill, s6_rx_fill, ulong, 0444);
+module_param_named(stage6_rx_target, s6_rx_target, ulong, 0444);
+module_param_named(stage6_rx_debt, s6_rx_debt, ulong, 0444);
+
+static void s6_rx_arm_retry(struct htt_pdev_t *pdev)
+{
+	unsigned int delay = HTT_RX_RING_REFILL_RETRY_TIME_MS;
+
+	if (READ_ONCE(s6_refill) &&
+	    pdev->rx_ring.fill_cnt >= pdev->rx_ring.fill_level / 2)
+		delay = min_t(unsigned int, delay * 4, 200);
+	qdf_timer_stop(&pdev->rx_ring.refill_retry_timer);
+	pdev->refill_retry_timer_starts++;
+	s6_rx_retry_arms++;
+	s6_rx_retry_ms = delay;
+	qdf_timer_start(&pdev->rx_ring.refill_retry_timer, delay);
+}
+
 /* full_reorder_offload case: this function is called with lock held */
 static int htt_rx_ring_fill_n(struct htt_pdev_t *pdev, int num)
 {
@@ -519,8 +553,7 @@ moretofill:
 			qdf_nbuf_alloc(pdev->osdev, HTT_RX_BUF_SIZE,
 				       0, 4, false);
 		if (!rx_netbuf) {
-			qdf_timer_stop(&pdev->rx_ring.
-						 refill_retry_timer);
+			s6_rx_alloc_fail++;
 			/*
 			 * Failed to fill it to the desired level -
 			 * we'll start a timer and try again next time.
@@ -530,10 +563,7 @@ moretofill:
 #ifdef DEBUG_DMA_DONE
 			pdev->rx_ring.dbg_refill_cnt++;
 #endif
-			pdev->refill_retry_timer_starts++;
-			qdf_timer_start(
-				&pdev->rx_ring.refill_retry_timer,
-				HTT_RX_RING_REFILL_RETRY_TIME_MS);
+			s6_rx_arm_retry(pdev);
 			goto update_alloc_idx;
 		}
 
@@ -570,7 +600,10 @@ moretofill:
 						QDF_DMA_FROM_DEVICE);
 #endif
 		if (status != QDF_STATUS_SUCCESS) {
+			s6_rx_map_fail++;
 			qdf_nbuf_free(rx_netbuf);
+			if (READ_ONCE(s6_refill))
+				s6_rx_arm_retry(pdev);
 			goto update_alloc_idx;
 		}
 
@@ -589,7 +622,10 @@ moretofill:
 				qdf_nbuf_unmap(pdev->osdev, rx_netbuf,
 					       QDF_DMA_FROM_DEVICE);
 #endif
+				s6_rx_hash_fail++;
 				qdf_nbuf_free(rx_netbuf);
+				if (READ_ONCE(s6_refill))
+					s6_rx_arm_retry(pdev);
 				goto update_alloc_idx;
 			}
 			htt_rx_dbg_rxbuf_set(pdev, paddr_marked, rx_netbuf);
@@ -627,6 +663,8 @@ update_alloc_idx:
 	qdf_mb();
 	*(pdev->rx_ring.alloc_idx.vaddr) = idx;
 	htt_rx_dbg_rxbuf_indupd(pdev, idx);
+	s6_rx_fill = pdev->rx_ring.fill_cnt;
+	s6_rx_target = pdev->rx_ring.fill_level;
 
 	return filled;
 }
@@ -695,6 +733,22 @@ static void htt_rx_ring_refill_retry(unsigned long arg)
 	int             num;
 
 	pdev->refill_retry_timer_calls++;
+	s6_rx_retry_calls++;
+	/* Non-reorder replenishment uses the existing reference gate, not
+	 * refill_lock. Retry the actual deficit, rather than unrelated debt.
+	 */
+	if (READ_ONCE(s6_refill) && !pdev->cfg.is_full_reorder_offload) {
+		if (qdf_atomic_dec_and_test(&pdev->rx_ring.refill_ref_cnt)) {
+			num = pdev->rx_ring.fill_level - pdev->rx_ring.fill_cnt;
+			if (num > 0)
+				htt_rx_ring_fill_n(pdev, num);
+			qdf_atomic_inc(&pdev->rx_ring.refill_ref_cnt);
+		} else {
+			qdf_atomic_inc(&pdev->rx_ring.refill_ref_cnt);
+			s6_rx_arm_retry(pdev);
+		}
+		return;
+	}
 	qdf_spin_lock_bh(&(pdev->rx_ring.refill_lock));
 
 	num = qdf_atomic_read(&pdev->rx_ring.refill_debt);
@@ -711,6 +765,7 @@ static void htt_rx_ring_refill_retry(unsigned long arg)
 		/* we could not fill all, timer must have been started */
 		pdev->refill_retry_timer_doubles++;
 	}
+	s6_rx_debt = max_t(int, 0, qdf_atomic_read(&pdev->rx_ring.refill_debt));
 	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
 }
 #endif
@@ -3370,6 +3425,7 @@ int htt_rx_msdu_buff_in_order_replenish(htt_pdev_handle pdev, uint32_t num)
 	} else {
 		qdf_atomic_add(num - filled, &pdev->rx_ring.refill_debt);
 	}
+	s6_rx_debt = max_t(int, 0, qdf_atomic_read(&pdev->rx_ring.refill_debt));
 	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
 
 	return filled;
@@ -3817,7 +3873,18 @@ int htt_rx_attach(struct htt_pdev_t *pdev)
 	pdev->rx_ring.htt_rx_restore = 0;
 #endif
 	htt_rx_dbg_rxbuf_init(pdev);
-	htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
+	if (READ_ONCE(s6_refill) && pdev->cfg.is_full_reorder_offload) {
+		int filled = htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
+
+		if (filled < pdev->rx_ring.fill_level) {
+			qdf_atomic_add(pdev->rx_ring.fill_level - filled,
+				       &pdev->rx_ring.refill_debt);
+			s6_rx_debt = qdf_atomic_read(&pdev->rx_ring.refill_debt);
+			s6_rx_arm_retry(pdev);
+		}
+	} else {
+		htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
+	}
 
 	if (pdev->cfg.is_full_reorder_offload) {
 		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
