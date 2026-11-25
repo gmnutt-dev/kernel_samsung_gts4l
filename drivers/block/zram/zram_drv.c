@@ -33,6 +33,7 @@
 #include <linux/idr.h>
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
+#include <linux/tab_s4_stage6i.h>
 
 #include "zram_drv.h"
 
@@ -1328,6 +1329,7 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	unsigned int size;
 	void *src, *dst;
 	int ret;
+	u64 decode_start = 0, decode_ns = 0;
 
 	zram_slot_lock(zram, index);
 	if (access)
@@ -1375,12 +1377,17 @@ static int __zram_bvec_read(struct zram *zram, struct page *page, u32 index,
 	} else {
 
 		dst = kmap_atomic(page);
+		decode_start = tab_s4_latency_start();
 		ret = zcomp_decompress(zstrm, src, size, dst);
+		decode_ns = tab_s4_latency_elapsed(decode_start);
 		kunmap_atomic(dst);
 		zcomp_stream_put(zram->comp);
 	}
 	zs_unmap_object(zram->mem_pool, zram_entry_handle(zram, entry));
 	zram_slot_unlock(zram, index);
+
+	if (decode_start)
+		tab_s4_latency_record(TAB_LAT_DECOMPRESS, decode_ns);
 
 	/* Should NEVER happen. Return bio error if it does. */
 	if (unlikely(ret))
@@ -1403,7 +1410,13 @@ static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 			return -ENOMEM;
 	}
 
-	ret = __zram_bvec_read(zram, page, index, bio, is_partial_io(bvec), access);
+	{
+		u64 start = tab_s4_latency_start();
+
+		ret = __zram_bvec_read(zram, page, index, bio,
+				      is_partial_io(bvec), access);
+		tab_s4_latency_end(TAB_LAT_ZRAM_READ, start);
+	}
 	if (unlikely(ret))
 		goto out;
 

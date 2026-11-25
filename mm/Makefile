@@ -46,6 +46,7 @@ obj-y += init-mm.o
 obj-$(CONFIG_TAB_S4_STAGE6B) += tab_s4_stage6b.o
 obj-$(CONFIG_TAB_S4_STAGE6C) += tab_s4_stage6c.o
 obj-$(CONFIG_TAB_S4_STAGE6D) += tab_s4_stage6d.o
+obj-$(CONFIG_TAB_S4_STAGE6I) += tab_s4_stage6i.o
 
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o

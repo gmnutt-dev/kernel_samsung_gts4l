@@ -801,6 +801,15 @@ config TAB_S4_STAGE6D
 	  2=contextual scan policy. Mode 0 leaves Stage 6B event handling
 	  unchanged apart from a lightweight mode check.
 
+config TAB_S4_STAGE6I
+	bool "Tab S4 opt-in latency histograms"
+	depends on MMU && SWAP && PROC_FS
+	default n
+	help
+	  Observe elapsed reclaim, swap fault, zram read and decode times,
+	  and long scheduler queue segments when SCHEDSTATS is enabled.
+	  Disabled at runtime by default; does not alter reclaim policy.
+
 config TAB_S4_LMKD_VMSTAT_COMPAT
 	bool "Tab S4 Android lmkd aggregate /proc/vmstat reclaim counters"
 	depends on PROC_FS && VM_EVENT_COUNTERS

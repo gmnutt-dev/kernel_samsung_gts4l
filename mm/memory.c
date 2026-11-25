@@ -55,6 +55,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/kallsyms.h>
 #include <linux/swapops.h>
+#include <linux/tab_s4_stage6i.h>
 #include <linux/elf.h>
 #include <linux/gfp.h>
 #include <linux/migrate.h>
@@ -3425,8 +3426,18 @@ static int handle_pte_fault(struct mm_struct *mm,
 			return do_anonymous_page(mm, vma, address, pte, pmd,
 					flags);
 		}
-		return do_swap_page(mm, vma, address,
-					pte, pmd, flags, entry);
+		{
+			u64 start = 0;
+			int result;
+
+			if (tab_s4_latency_enabled() &&
+			    !non_swap_entry(pte_to_swp_entry(entry)))
+				start = tab_s4_latency_start();
+			result = do_swap_page(mm, vma, address,
+					      pte, pmd, flags, entry);
+			tab_s4_latency_end(TAB_LAT_SWAP_FAULT, start);
+			return result;
+		}
 	}
 
 	if (pte_protnone(entry) && vma_is_accessible(vma))

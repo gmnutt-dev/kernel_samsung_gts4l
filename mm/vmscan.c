@@ -48,6 +48,7 @@
 #include <linux/printk.h>
 #include <linux/migrate.h>
 #include <linux/psi.h>
+#include <linux/tab_s4_stage6i.h>
 #ifdef CONFIG_TAB_S4_STAGE6B
 #include <linux/tab_s4_stage6b.h>
 #endif
@@ -3453,13 +3454,17 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 #endif
 	};
 
+	u64 s6i_start = tab_s4_latency_start();
+
 	/*
 	 * Do not enter reclaim if fatal signal was delivered while throttled.
 	 * 1 is returned so that the page allocator does not OOM kill at this
 	 * point.
 	 */
-	if (throttle_direct_reclaim(reclaim_mask, zonelist, nodemask))
+	if (throttle_direct_reclaim(reclaim_mask, zonelist, nodemask)) {
+		tab_s4_latency_end(TAB_LAT_DIRECT, s6i_start);
 		return 1;
+	}
 
 	trace_mm_vmscan_direct_reclaim_begin(order,
 				sc.may_writepage,
@@ -3468,6 +3473,7 @@ unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
 	trace_mm_vmscan_direct_reclaim_end(nr_reclaimed);
+	tab_s4_latency_end(TAB_LAT_DIRECT, s6i_start);
 
 	return nr_reclaimed;
 }
@@ -4250,13 +4256,18 @@ static int kswapd(void *p)
 		 * after returning from the refrigerator
 		 */
 		if (!ret) {
+			u64 s6i_start = tab_s4_latency_start();
+
 			trace_mm_vmscan_kswapd_wake(pgdat->node_id,
 						classzone_idx, order);
 			balanced_classzone_idx = balance_pgdat(pgdat, order,
 								classzone_idx);
+			tab_s4_latency_end(TAB_LAT_KSWAPD, s6i_start);
 #ifdef CONFIG_TAB_S4_STAGE6C
 			/* Optional event-driven work after normal background reclaim. */
+			s6i_start = tab_s4_latency_start();
 			tab_s4_stage6c_kswapd_step(pgdat);
+			tab_s4_latency_end(TAB_LAT_6C, s6i_start);
 #endif
 		}
 	}

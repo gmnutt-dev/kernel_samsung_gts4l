@@ -1,3 +1,4 @@
+#include <linux/tab_s4_stage6i.h>
 
 #ifdef CONFIG_SCHEDSTATS
 
@@ -174,6 +175,9 @@ static void sched_info_arrive(struct rq *rq, struct task_struct *t)
 	t->sched_info.last_arrival = now;
 	t->sched_info.pcount++;
 
+	/* Only record >=1 ms queued segments; no new task timestamps. */
+	if (delta >= 1000000ULL && tab_s4_latency_enabled())
+		tab_s4_latency_record(TAB_LAT_RUNQUEUE, delta);
 	rq_sched_info_arrive(rq, delta);
 }
 
