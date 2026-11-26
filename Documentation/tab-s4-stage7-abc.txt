@@ -40,10 +40,11 @@ The live modem subsystem is ONLINE even on the Wi-Fi tablet. Both
 120 MiB firmware and 96 MiB shared carveouts and the 2 MiB MBA region
 are preserved. Boot guaranteed clients and hypervisor ownership cannot
 safely be inferred from the LTE radio's absence. Root-only
-stage7c_memshare_stats exposes per-slot boot request, DMA address,
+stage7c_memshare_stats exposes per-modem-client-ID boot request, DMA address,
 allocation failures, actual generic/legacy request counts, maximum
 requested size and mapping results. A DMA address is not assumed to be
 a PFN. Last allocation addresses are history, not current ownership.
+Client ID history is retained across internal slot reuse; supported IDs 0–9.
 No automatic modem reduction or changed firmware requests. Inspect
 client ID 3 after normal use, WLAN/GPS/Bluetooth and suspend/resume,
 then compare DMA placement and firmware requirements before resizing.
