@@ -18,6 +18,9 @@
 #include <linux/highmem.h>
 #include <linux/version.h>
 #include <linux/moduleparam.h>
+#include <linux/mutex.h>
+#include <linux/atomic.h>
+#include <linux/log2.h>
 
 #include "kgsl.h"
 #include "kgsl_device.h"
@@ -62,6 +65,9 @@ module_param_named(stage7_pool_reclaim_reserved,
 MODULE_PARM_DESC(stage7_pool_reclaim_reserved,
 		 "Allow reclaim of idle reserved GPU pool pages (default Y)");
 static bool stage7_pools_ready;
+static bool stage7_shrinker_registered;
+static DEFINE_MUTEX(stage7_pool_lifecycle_lock);
+static atomic_long_t stage7_reclaimed_pages = ATOMIC_LONG_INIT(0);
 
 
 /* Returns KGSL pool corresponding to input page order*/
@@ -238,25 +244,30 @@ kgsl_pool_reduce(unsigned long nr_to_scan, bool reclaim_reserved)
  */
 static int stage7_pool_stats_get(char *buffer, const struct kernel_param *kp)
 {
-	bool ready = smp_load_acquire(&stage7_pools_ready);
 	bool reclaim_reserved = READ_ONCE(stage7_pool_reclaim_reserved);
 	int len, i;
 
+	mutex_lock(&stage7_pool_lifecycle_lock);
 	len = scnprintf(buffer, PAGE_SIZE,
-			"ready=%u reclaim_reserved=%u base_page_size=%lu\n",
-			ready, reclaim_reserved, PAGE_SIZE);
-	if (!ready)
-		return len;
+			"ready=%u reclaim_reserved=%u base_page_size=%lu shrinker_registered=%u reclaimed_pages=%ld\n",
+			stage7_pools_ready, reclaim_reserved, PAGE_SIZE,
+			stage7_shrinker_registered,
+			atomic_long_read(&stage7_reclaimed_pages));
+	if (!stage7_pools_ready)
+		goto out;
 
 	for (i = 0; i < kgsl_num_pools; i++) {
 		struct kgsl_page_pool *pool = &kgsl_pools[i];
 
 		len += scnprintf(buffer + len, PAGE_SIZE - len,
-				 "order=%u cached_pages=%d allocation_allowed=%u reclaimable=%u\n",
+				 "order=%u cached_pages=%d reserved_target_pages=%u allocation_allowed=%u reclaimable=%u\n",
 				 pool->pool_order, kgsl_pool_size(pool),
+				 pool->reserved_pages << pool->pool_order,
 				 pool->allocation_allowed,
 				 reclaim_reserved || pool->allocation_allowed);
 	}
+out:
+	mutex_unlock(&stage7_pool_lifecycle_lock);
 	return len;
 }
 
@@ -528,6 +539,8 @@ kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
 	if (!sc->nr_to_scan)
 		return 0;
 	ret = kgsl_pool_reduce(sc->nr_to_scan, reclaim_reserved);
+	if (ret)
+		atomic_long_add(ret, &stage7_reclaimed_pages);
 
 	return ret ? ret : SHRINK_STOP;
 }
@@ -544,7 +557,8 @@ static struct shrinker kgsl_pool_shrinker = {
 	.count_objects = kgsl_pool_shrink_count_objects,
 	.scan_objects = kgsl_pool_shrink_scan_objects,
 	.seeks = DEFAULT_SEEKS,
-	.batch = 0,
+	/* Match the largest supported compound block for full scans. */
+	.batch = 1 << KGSL_MAX_POOL_ORDER,
 };
 
 static void kgsl_pool_config(unsigned int order, unsigned int reserved_pages,
@@ -556,8 +570,14 @@ static void kgsl_pool_config(unsigned int order, unsigned int reserved_pages,
 		return;
 	}
 #endif
-	if ((order > KGSL_MAX_POOL_ORDER) ||
-			(reserved_pages > KGSL_MAX_RESERVED_PAGES))
+	if (kgsl_num_pools >= KGSL_MAX_POOLS ||
+	    order > KGSL_MAX_POOL_ORDER ||
+	    reserved_pages > KGSL_MAX_RESERVED_PAGES)
+		return;
+
+	/* Allocation fallback expects strictly increasing orders. */
+	if (kgsl_num_pools &&
+	    order <= kgsl_pools[kgsl_num_pools - 1].pool_order)
 		return;
 
 	kgsl_pools[kgsl_num_pools].pool_order = order;
@@ -571,24 +591,26 @@ static void kgsl_pool_config(unsigned int order, unsigned int reserved_pages,
 static void kgsl_of_parse_mempools(struct device_node *node)
 {
 	struct device_node *child;
-	unsigned int page_size, reserved_pages = 0;
+	unsigned int page_size, reserved_pages;
 	bool allocation_allowed;
 
 	for_each_child_of_node(node, child) {
 		unsigned int index;
 
 		if (of_property_read_u32(child, "reg", &index))
-			return;
+			continue;
 
 		if (index >= KGSL_MAX_POOLS)
 			continue;
 
 		if (of_property_read_u32(child, "qcom,mempool-page-size",
-					&page_size))
-			return;
+					&page_size) ||
+		    page_size < PAGE_SIZE || !is_power_of_2(page_size))
+			continue;
 
+		reserved_pages = 0;
 		of_property_read_u32(child, "qcom,mempool-reserved",
-				&reserved_pages);
+					&reserved_pages);
 
 		allocation_allowed = of_property_read_bool(child,
 				"qcom,mempool-allocate");
@@ -602,34 +624,61 @@ static void kgsl_of_get_mempools(struct device_node *parent)
 {
 	struct device_node *node;
 
-	node = of_find_compatible_node(parent, NULL, "qcom,gpu-mempools");
-	if (node != NULL) {
-		/* Get Max pages limit for mempool */
+	/* The pool node belongs to this GPU, not another device. */
+	for_each_child_of_node(parent, node) {
+		if (!of_device_is_compatible(node, "qcom,gpu-mempools"))
+			continue;
 		of_property_read_u32(node, "qcom,mempool-max-pages",
-				&kgsl_pool_max_pages);
+					&kgsl_pool_max_pages);
 		kgsl_of_parse_mempools(node);
+		of_node_put(node);
+		break;
 	}
 }
 
 void kgsl_init_page_pools(struct platform_device *pdev)
 {
+	int ret;
 
-	/* Get GPU mempools data and configure pools */
+	mutex_lock(&stage7_pool_lifecycle_lock);
+	atomic_long_set(&stage7_reclaimed_pages, 0);
+
+	/* Get GPU mempools data and configure pools. */
 	kgsl_of_get_mempools(pdev->dev.of_node);
 
-	/* Reserve the appropriate number of pages for each pool */
-	kgsl_pool_reserve_pages();
-
-	/* Initialize shrinker */
-	register_shrinker(&kgsl_pool_shrinker);
-	smp_store_release(&stage7_pools_ready, true);
+	/*
+	 * Register before reserving pages. If registration fails, fall back
+	 * to the existing no-pool allocation path instead of retaining an
+	 * unreclaimable cache. All lists are initialized before registration.
+	 */
+	if (kgsl_num_pools) {
+		ret = register_shrinker(&kgsl_pool_shrinker);
+		if (ret) {
+			pr_warn("KGSL: pool shrinker unavailable (%d); disabling pools\n",
+				ret);
+			kgsl_num_pools = 0;
+			kgsl_pool_max_pages = 0;
+		} else {
+			stage7_shrinker_registered = true;
+			kgsl_pool_reserve_pages();
+		}
+	}
+	stage7_pools_ready = true;
+	mutex_unlock(&stage7_pool_lifecycle_lock);
 }
 
 void kgsl_exit_page_pools(void)
 {
+	mutex_lock(&stage7_pool_lifecycle_lock);
 	/* Stop shrink callbacks before draining the idle pool lists. */
-	smp_store_release(&stage7_pools_ready, false);
-	unregister_shrinker(&kgsl_pool_shrinker);
+	stage7_pools_ready = false;
+	if (stage7_shrinker_registered) {
+		unregister_shrinker(&kgsl_pool_shrinker);
+		stage7_shrinker_registered = false;
+	}
 	kgsl_pool_reduce(~0UL, true);
+	kgsl_num_pools = 0;
+	kgsl_pool_max_pages = 0;
+	mutex_unlock(&stage7_pool_lifecycle_lock);
 }
 
