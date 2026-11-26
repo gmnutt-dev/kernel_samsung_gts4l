@@ -21,6 +21,46 @@
 #include <linux/usb_notify.h>
 #include <linux/string.h>
 #include "usb_notify_sysfs.h"
+#include <linux/spinlock.h>
+
+/*
+ * Firmware version is device metadata, not an event log. Preserve the
+ * original eight-byte encoding even when the USB activity logger is off.
+ */
+#if defined(CONFIG_USB_HW_PARAM) && !defined(CONFIG_USB_NOTIFY_PROC_LOG)
+static DEFINE_SPINLOCK(ccic_version_lock);
+static unsigned long long ccic_version;
+
+void store_ccic_version(unsigned char *hw, unsigned char *sw_main,
+			unsigned char *sw_boot)
+{
+	unsigned char version[8];
+	unsigned long flags;
+
+	if (!hw || !sw_main || !sw_boot)
+		return;
+
+	memcpy(version, hw, 4);
+	memcpy(version + 4, sw_main, 3);
+	memcpy(version + 7, sw_boot, 1);
+	spin_lock_irqsave(&ccic_version_lock, flags);
+	memcpy(&ccic_version, version, sizeof(ccic_version));
+	spin_unlock_irqrestore(&ccic_version_lock, flags);
+}
+EXPORT_SYMBOL(store_ccic_version);
+
+unsigned long long show_ccic_version(void)
+{
+	unsigned long long version;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ccic_version_lock, flags);
+	version = ccic_version;
+	spin_unlock_irqrestore(&ccic_version_lock, flags);
+	return version;
+}
+EXPORT_SYMBOL(show_ccic_version);
+#endif
 
 #if defined(CONFIG_USB_HW_PARAM)
 const char
