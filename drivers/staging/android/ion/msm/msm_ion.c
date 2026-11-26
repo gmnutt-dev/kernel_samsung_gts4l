@@ -576,6 +576,18 @@ static void msm_ion_get_heap_dt_data(struct device_node *node,
 	}
 }
 
+static bool stage7a_skip_camera_heap(struct device_node *node)
+{
+#ifdef CONFIG_TAB_S4_STAGE7A
+	extern bool tab_s4_stage7a_camera_released;
+
+	return tab_s4_stage7a_camera_released &&
+		!strcmp(node->full_name, "/soc/qcom,ion/qcom,ion-heap@30");
+#else
+	return false;
+#endif
+}
+
 static struct ion_platform_data *msm_ion_parse_dt(struct platform_device *pdev)
 {
 	struct ion_platform_data *pdata = 0;
@@ -589,7 +601,8 @@ static struct ion_platform_data *msm_ion_parse_dt(struct platform_device *pdev)
 	int idx = 0;
 
 	for_each_available_child_of_node(dt_node, node)
-		num_heaps++;
+		if (!stage7a_skip_camera_heap(node))
+			num_heaps++;
 
 	if (!num_heaps)
 		return ERR_PTR(-EINVAL);
@@ -608,6 +621,8 @@ static struct ion_platform_data *msm_ion_parse_dt(struct platform_device *pdev)
 	pdata->nr = num_heaps;
 
 	for_each_available_child_of_node(dt_node, node) {
+		if (stage7a_skip_camera_heap(node))
+			continue;
 		new_dev = of_platform_device_create(node, NULL, &pdev->dev);
 		if (!new_dev) {
 			pr_err("Failed to create device %s\n", node->name);
