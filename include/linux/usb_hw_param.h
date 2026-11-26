@@ -64,13 +64,5 @@ int get_usb210_count(void);
 unsigned long get_waterDet_duration(void);
 unsigned long get_wVbus_duration(void);
 int get_waterChg_count(void);
-#if defined(CONFIG_USB_NOTIFY_PROC_LOG)
 unsigned long long show_ccic_version(void);
-#else
-/* Version storage belongs to the optional USB event logger. */
-static inline unsigned long long show_ccic_version(void)
-{
-	return 0;
-}
-#endif
 #endif
