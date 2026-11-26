@@ -801,6 +801,16 @@ config TAB_S4_STAGE6D
 	  2=contextual scan policy. Mode 0 leaves Stage 6B event handling
 	  unchanged apart from a lightweight mode check.
 
+config TAB_S4_STAGE7A
+	bool "Tab S4 Wi-Fi experimental release of orphaned camera carveout"
+	depends on ARM64 && OF_EARLY_FLATTREE && SEC_GTS4LWIFI_PROJECT && ION_MSM
+	default n
+	help
+	  Skip the exact 280 MiB RBIN reservation on a matching SM-T830
+	  boot tree. The legacy RBIN heap is unsupported in this kernel.
+	  Requires hardware validation. Never release secure camera memory.
+	  Disable at boot with tab_s4_stage7a=0, or build with this off.
+
 config TAB_S4_STAGE6I
 	bool "Tab S4 opt-in latency histograms"
 	depends on MMU && SWAP && PROC_FS
