@@ -25,6 +25,10 @@
 #include <linux/debugfs.h>
 #include <linux/serial_core.h>
 #include <linux/sysfs.h>
+#ifdef CONFIG_TAB_S4_STAGE7A
+#include <linux/moduleparam.h>
+#include <linux/export.h>
+#endif
 
 #include <asm/setup.h>  /* for COMMAND_LINE_SIZE */
 #include <asm/page.h>
@@ -534,6 +538,116 @@ static int __init __reserved_mem_check_root(unsigned long node)
 	return 0;
 }
 
+#ifdef CONFIG_TAB_S4_STAGE7A
+/* Never mutate the arm64 read-only early FDT mapping. */
+static bool stage7a_enabled __initdata = true;
+bool tab_s4_stage7a_camera_released;
+EXPORT_SYMBOL_GPL(tab_s4_stage7a_camera_released);
+module_param_named(stage7a_camera_released,
+		   tab_s4_stage7a_camera_released, bool, 0444);
+
+static int __init stage7a_setup(char *arg)
+{
+	bool value;
+
+	if (!arg || kstrtobool(arg, &value)) {
+		stage7a_enabled = false;
+		return 0;
+	}
+	stage7a_enabled = value;
+	return 0;
+}
+early_param("tab_s4_stage7a", stage7a_setup);
+
+static bool __init stage7a_wifi_boot(void)
+{
+	const char *key = "androidboot.em.model=SM-T830";
+	const char *p = boot_command_line;
+	size_t len = strlen(key);
+
+	while ((p = strstr(p, key))) {
+		if ((p == boot_command_line || p[-1] == ' ') &&
+		    (!p[len] || p[len] == ' '))
+			return true;
+		p += len;
+	}
+	return false;
+}
+
+static bool __init stage7a_camera_region(unsigned long node,
+					const char *uname)
+{
+	const void *fdt = initial_boot_params;
+	const fdt32_t *reg, *ref;
+	const char *type;
+	u32 phandle;
+	int len, heap, ion, off, i, refs = 0;
+	const phys_addr_t base = 0xc0000000ULL;
+	const phys_addr_t size = 0x11800000ULL;
+
+	if (!stage7a_enabled ||
+	    strcmp(uname, "camera_mem_region@0xC0000000"))
+		return false;
+
+	if (!stage7a_wifi_boot() || dt_root_addr_cells != 2 ||
+	    dt_root_size_cells != 2 ||
+	    !of_flat_dt_is_compatible(0, "qcom,msm8998") ||
+	    fdt_path_offset(fdt, "/reserved-memory/camera_mem_region@0xC0000000") != node ||
+	    !of_flat_dt_is_compatible(node, "shared-dma-pool") ||
+	    !fdt_getprop(fdt, node, "recycleable", NULL) ||
+	    fdt_getprop(fdt, node, "reusable", NULL) ||
+	    fdt_getprop(fdt, node, "no-map", NULL))
+		goto keep;
+
+	reg = fdt_getprop(fdt, node, "reg", &len);
+	if (!reg || len != 4 * sizeof(*reg) ||
+	    fdt32_to_cpu(reg[0]) || fdt32_to_cpu(reg[1]) != base ||
+	    fdt32_to_cpu(reg[2]) || fdt32_to_cpu(reg[3]) != size ||
+	    !memblock_is_region_memory(base, size) ||
+	    memblock_is_region_reserved(base, size))
+		goto keep;
+
+	phandle = fdt_get_phandle(fdt, node);
+	ion = fdt_path_offset(fdt, "/soc/qcom,ion");
+	heap = fdt_path_offset(fdt, "/soc/qcom,ion/qcom,ion-heap@30");
+	if (!phandle || ion < 0 || heap < 0 ||
+	    fdt_node_check_compatible(fdt, ion, "qcom,msm-ion"))
+		goto keep;
+	type = fdt_getprop(fdt, heap, "qcom,ion-heap-type", &len);
+	if (!type || len != sizeof("RBIN") || memcmp(type, "RBIN", len))
+		goto keep;
+	reg = fdt_getprop(fdt, heap, "reg", &len);
+	if (!reg || len != sizeof(*reg) || fdt32_to_cpu(*reg) != 30)
+		goto keep;
+
+	/* Require that exactly the known unsupported heap references it. */
+	for (off = 0; off >= 0; off = fdt_next_node(fdt, off, NULL)) {
+		ref = fdt_getprop(fdt, off, "memory-region", &len);
+		if (!ref)
+			continue;
+		if (len % sizeof(*ref))
+			goto keep;
+		for (i = 0; i < len / sizeof(*ref); i++) {
+			if (fdt32_to_cpu(ref[i]) != phandle)
+				continue;
+			if (off != heap || len != sizeof(*ref))
+				goto keep;
+			refs++;
+		}
+	}
+	if (off != -FDT_ERR_NOTFOUND || refs != 1)
+		goto keep;
+
+	tab_s4_stage7a_camera_released = true;
+	pr_info("Stage7A: bypassing orphaned RBIN reservation %pa size %pa\n",
+		&base, &size);
+	return true;
+keep:
+	pr_warn("Stage7A: camera reservation guard rejected; retaining region\n");
+	return false;
+}
+#endif
+
 /**
  * fdt_scan_reserved_mem() - scan a single FDT node for reserved memory
  */
@@ -565,6 +679,10 @@ static int __init __fdt_scan_reserved_mem(unsigned long node, const char *uname,
 	if (status && strcmp(status, "okay") != 0 && strcmp(status, "ok") != 0)
 		return 0;
 
+#ifdef CONFIG_TAB_S4_STAGE7A
+	if (stage7a_camera_region(node, uname))
+		return 0;
+#endif
 	err = __reserved_mem_reserve_reg(node, uname);
 	if (err == -ENOENT && of_get_flat_dt_prop(node, "size", NULL))
 		fdt_reserved_mem_save_node(node, uname, 0, 0);
