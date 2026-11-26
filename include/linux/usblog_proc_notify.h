@@ -131,15 +131,19 @@ enum ccic_pin_assignment {
 #define ALTERNATE_MODE_START		(1 << 3)
 #define ALTERNATE_MODE_RESET		(1 << 4)
 
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-extern void store_usblog_notify(int type, void *param1, void *parma2);
+#if defined(CONFIG_USB_NOTIFY_PROC_LOG) || defined(CONFIG_USB_HW_PARAM)
 extern void store_ccic_version(unsigned char *hw, unsigned char *sw_main,
 			unsigned char *sw_boot);
-extern int register_usblog_proc(void);
-extern void unregister_usblog_proc(void);
 #else
 static inline void store_ccic_version(unsigned char *hw, unsigned char *sw_main,
 			unsigned char *sw_boot) {}
+#endif
+
+#ifdef CONFIG_USB_NOTIFY_PROC_LOG
+extern void store_usblog_notify(int type, void *param1, void *parma2);
+extern int register_usblog_proc(void);
+extern void unregister_usblog_proc(void);
+#else
 static inline int register_usblog_proc(void)
 			{return 0; }
 static inline void unregister_usblog_proc(void) {}
