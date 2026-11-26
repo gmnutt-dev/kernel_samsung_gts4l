@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/highmem.h>
 #include <linux/version.h>
+#include <linux/moduleparam.h>
 
 #include "kgsl.h"
 #include "kgsl_device.h"
@@ -48,6 +49,19 @@ struct kgsl_page_pool {
 static struct kgsl_page_pool kgsl_pools[KGSL_MAX_POOLS];
 static int kgsl_num_pools;
 static int kgsl_pool_max_pages;
+
+/*
+ * Stage 7: allocation_allowed describes fresh buddy allocations, not
+ * ownership of idle pages. Allow the VM to reclaim idle reserved pools
+ * while leaving the existing lower-order allocation fallback unchanged.
+ * N restores the protected-pool policy, with corrected shrink accounting.
+ */
+static bool stage7_pool_reclaim_reserved = true;
+module_param_named(stage7_pool_reclaim_reserved,
+		   stage7_pool_reclaim_reserved, bool, 0644);
+MODULE_PARM_DESC(stage7_pool_reclaim_reserved,
+		 "Allow reclaim of idle reserved GPU pool pages (default Y)");
+static bool stage7_pools_ready;
 
 
 /* Returns KGSL pool corresponding to input page order*/
@@ -170,52 +184,87 @@ _kgsl_pool_shrink(struct kgsl_page_pool *pool, int num_pages)
 	return pcount;
 }
 
+/* Count only idle base pages eligible under this policy. */
+static unsigned long kgsl_pool_reclaimable(bool reclaim_reserved)
+{
+	unsigned long total = 0;
+	int i;
+
+	for (i = 0; i < kgsl_num_pools; i++) {
+		struct kgsl_page_pool *pool = &kgsl_pools[i];
+
+		if (reclaim_reserved || pool->allocation_allowed)
+			total += kgsl_pool_size(pool);
+	}
+	return total;
+}
+
 /*
- * This function reduces the total pool size
- * to number of pages specified by target_pages.
- *
- * If target_pages are greater than current pool size
- * nothing needs to be done otherwise remove
- * (current_pool_size - target_pages) pages from pool
- * starting from higher order pool.
+ * A requested scan and its return value are in base pages. The last
+ * compound allocation may round the request up by at most one block
+ * minus one page. Never count an in-use GPU page or subtract cumulative
+ * progress twice. _kgsl_pool_shrink removes pages under the pool lock.
  */
 static unsigned long
-kgsl_pool_reduce(unsigned int target_pages, bool exit)
+kgsl_pool_reduce(unsigned long nr_to_scan, bool reclaim_reserved)
 {
-	int total_pages = 0;
+	unsigned long freed = 0;
 	int i;
-	int nr_removed;
-	struct kgsl_page_pool *pool;
-	unsigned long pcount = 0;
 
-	total_pages = kgsl_pool_size_total();
+	for (i = kgsl_num_pools - 1; i >= 0 && freed < nr_to_scan; i--) {
+		struct kgsl_page_pool *pool = &kgsl_pools[i];
+		unsigned long available;
+		unsigned int scan_pages;
 
-	for (i = (kgsl_num_pools - 1); i >= 0; i--) {
-		pool = &kgsl_pools[i];
-
-		/*
-		 * Only reduce the pool sizes for pools which are allowed to
-		 * allocate memory unless we are at close, in which case the
-		 * reserved memory for all pools needs to be freed
-		 */
-		if (!pool->allocation_allowed && !exit)
+		if (!reclaim_reserved && !pool->allocation_allowed)
 			continue;
 
-		total_pages -= pcount;
+		available = kgsl_pool_size(pool);
+		scan_pages = min_t(unsigned long, nr_to_scan - freed,
+				   available);
+		if (!scan_pages)
+			continue;
 
-		nr_removed = total_pages - target_pages;
-		if (nr_removed <= 0)
-			return pcount;
-
-		/* Round up to integral number of pages in this pool */
-		nr_removed = ALIGN(nr_removed, 1 << pool->pool_order);
-
-		/* Remove nr_removed pages from this pool*/
-		pcount += _kgsl_pool_shrink(pool, nr_removed);
+		/* available is already a multiple of this compound order. */
+		scan_pages = ALIGN(scan_pages, 1U << pool->pool_order);
+		freed += _kgsl_pool_shrink(pool, scan_pages);
 	}
-
-	return pcount;
+	return freed;
 }
+
+/*
+ * On-demand snapshots only; each pool's count is individually locked.
+ * A snapshot is not a globally atomic view of concurrent GPU activity.
+ */
+static int stage7_pool_stats_get(char *buffer, const struct kernel_param *kp)
+{
+	bool ready = smp_load_acquire(&stage7_pools_ready);
+	bool reclaim_reserved = READ_ONCE(stage7_pool_reclaim_reserved);
+	int len, i;
+
+	len = scnprintf(buffer, PAGE_SIZE,
+			"ready=%u reclaim_reserved=%u base_page_size=%lu\n",
+			ready, reclaim_reserved, PAGE_SIZE);
+	if (!ready)
+		return len;
+
+	for (i = 0; i < kgsl_num_pools; i++) {
+		struct kgsl_page_pool *pool = &kgsl_pools[i];
+
+		len += scnprintf(buffer + len, PAGE_SIZE - len,
+				 "order=%u cached_pages=%d allocation_allowed=%u reclaimable=%u\n",
+				 pool->pool_order, kgsl_pool_size(pool),
+				 pool->allocation_allowed,
+				 reclaim_reserved || pool->allocation_allowed);
+	}
+	return len;
+}
+
+static const struct kernel_param_ops stage7_pool_stats_ops = {
+	.get = stage7_pool_stats_get,
+};
+module_param_cb(stage7_pool_stats, &stage7_pool_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(stage7_pool_stats, "On-demand idle KGSL pool snapshots");
 
 /**
  * kgsl_pool_free_sgt() - Free scatter-gather list
@@ -469,32 +518,25 @@ static void kgsl_pool_reserve_pages(void)
 }
 
 /* Functions for the shrinker */
-
 static unsigned long
 kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
-					struct shrink_control *sc)
+				struct shrink_control *sc)
 {
-	/* nr represents number of pages to be removed*/
-	int nr = sc->nr_to_scan;
-	int total_pages = kgsl_pool_size_total();
 	unsigned long ret;
+	bool reclaim_reserved = READ_ONCE(stage7_pool_reclaim_reserved);
 
-	/* Target pages represents new  pool size */
-	int target_pages = (nr > total_pages) ? 0 : (total_pages - nr);
+	if (!sc->nr_to_scan)
+		return 0;
+	ret = kgsl_pool_reduce(sc->nr_to_scan, reclaim_reserved);
 
-	/* Reduce pool size to target_pages */
-	ret = kgsl_pool_reduce(target_pages, false);
-
-	/* If we are unable to shrink more, stop trying */
-	return (ret == 0) ? SHRINK_STOP : ret;
+	return ret ? ret : SHRINK_STOP;
 }
 
 static unsigned long
 kgsl_pool_shrink_count_objects(struct shrinker *shrinker,
-					struct shrink_control *sc)
+				struct shrink_control *sc)
 {
-	/* Return total pool size as everything in pool can be freed */
-	return kgsl_pool_size_total();
+	return kgsl_pool_reclaimable(READ_ONCE(stage7_pool_reclaim_reserved));
 }
 
 /* Shrinker callback data*/
@@ -580,14 +622,14 @@ void kgsl_init_page_pools(struct platform_device *pdev)
 
 	/* Initialize shrinker */
 	register_shrinker(&kgsl_pool_shrinker);
+	smp_store_release(&stage7_pools_ready, true);
 }
 
 void kgsl_exit_page_pools(void)
 {
-	/* Release all pages in pools, if any.*/
-	kgsl_pool_reduce(0, true);
-
-	/* Unregister shrinker */
+	/* Stop shrink callbacks before draining the idle pool lists. */
+	smp_store_release(&stage7_pools_ready, false);
 	unregister_shrinker(&kgsl_pool_shrinker);
+	kgsl_pool_reduce(~0UL, true);
 }
 
