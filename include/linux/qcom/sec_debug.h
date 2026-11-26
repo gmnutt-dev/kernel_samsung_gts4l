@@ -335,8 +335,15 @@ static inline void sec_debug_sched_log_init(void)
 }
 #define secdbg_sched_msg(fmt, ...)
 #endif
+#ifdef CONFIG_SEC_DEBUG_SCHED_LOG
 extern void sec_debug_irq_enterexit_log(unsigned int irq,
-						unsigned long long start_time);
+					unsigned long long start_time);
+#else
+static inline void sec_debug_irq_enterexit_log(unsigned int irq,
+					unsigned long long start_time)
+{
+}
+#endif
 
 /* klaatu - schedule log */
 #ifdef CONFIG_SEC_DEBUG_SCHED_LOG
