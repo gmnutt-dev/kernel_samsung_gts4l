@@ -28,6 +28,7 @@
 #ifdef CONFIG_TAB_S4_STAGE7A
 #include <linux/moduleparam.h>
 #include <linux/export.h>
+#include <linux/init.h>
 #endif
 
 #include <asm/setup.h>  /* for COMMAND_LINE_SIZE */
@@ -543,8 +544,11 @@ static int __init __reserved_mem_check_root(unsigned long node)
 static bool stage7a_enabled __initdata = true;
 bool tab_s4_stage7a_camera_released;
 EXPORT_SYMBOL_GPL(tab_s4_stage7a_camera_released);
-module_param_named(stage7a_camera_released,
-		   tab_s4_stage7a_camera_released, bool, 0444);
+static const struct kernel_param_ops stage7a_status_ops = {
+	.get = param_get_bool,
+};
+module_param_cb(stage7a_camera_released, &stage7a_status_ops,
+		&tab_s4_stage7a_camera_released, 0444);
 
 static int __init stage7a_setup(char *arg)
 {
