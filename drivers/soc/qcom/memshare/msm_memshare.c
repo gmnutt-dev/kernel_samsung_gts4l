@@ -15,6 +15,8 @@
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
 #include <linux/mutex.h>
+#include <linux/spinlock.h>
+#include <linux/moduleparam.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/notifier.h>
@@ -67,6 +69,141 @@ static struct memshare_driver *memsh_drv;
 static struct memshare_child *memsh_child;
 static struct mem_blocks memblock[MAX_CLIENTS];
 static uint32_t num_clients;
+
+/* Stage 7C: read-only event-directed evidence, not a new allocation policy.
+ * Slot indexes are internal memblock indexes, not QMI client IDs.
+ * DMA addresses are as returned by dma_alloc_attrs, not assumed PFNs.
+ */
+struct stage7c_client_audit {
+	u32 configured, client_id, configured_bytes, guaranteed;
+	u32 boot_attempted, boot_bytes, boot_mapped;
+	int boot_status;
+	u64 boot_dma_addr;
+	u64 requests, alloc_attempts, alloc_failures;
+	u32 max_request_bytes, last_request_bytes, last_alloc_bytes;
+	u64 last_success_dma_addr, hyp_success, hyp_failure;
+};
+static struct stage7c_client_audit stage7c_clients[MAX_CLIENTS];
+static DEFINE_SPINLOCK(stage7c_audit_lock);
+
+static void stage7c_configure(unsigned int slot, u32 id, u32 size, bool guarantee)
+{
+	unsigned long flags;
+	struct stage7c_client_audit *a;
+
+	if (slot >= MAX_CLIENTS)
+		return;
+	spin_lock_irqsave(&stage7c_audit_lock, flags);
+	a = &stage7c_clients[slot];
+	memset(a, 0, sizeof(*a));
+	a->configured = 1;
+	a->client_id = id;
+	a->configured_bytes = size;
+	a->guaranteed = guarantee;
+	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+}
+
+static void stage7c_request(unsigned int slot, u32 bytes)
+{
+	unsigned long flags;
+	struct stage7c_client_audit *a;
+
+	if (slot >= MAX_CLIENTS)
+		return;
+	spin_lock_irqsave(&stage7c_audit_lock, flags);
+	a = &stage7c_clients[slot];
+	a->requests++;
+	a->last_request_bytes = bytes;
+	a->max_request_bytes = max(a->max_request_bytes, bytes);
+	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+}
+
+static void stage7c_alloc_result(struct mem_blocks *pblk, u32 bytes, int rc)
+{
+	unsigned int slot;
+	unsigned long flags;
+	struct stage7c_client_audit *a;
+
+	if (pblk < memblock || pblk >= memblock + MAX_CLIENTS)
+		return;
+	slot = pblk - memblock;
+	spin_lock_irqsave(&stage7c_audit_lock, flags);
+	a = &stage7c_clients[slot];
+	a->alloc_attempts++;
+	a->last_alloc_bytes = bytes;
+	if (rc)
+		a->alloc_failures++;
+	else
+		a->last_success_dma_addr = pblk->phy_addr;
+	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+}
+
+static void stage7c_boot_result(unsigned int slot, u32 bytes, int rc)
+{
+	unsigned long flags;
+	struct stage7c_client_audit *a;
+
+	if (slot >= MAX_CLIENTS)
+		return;
+	spin_lock_irqsave(&stage7c_audit_lock, flags);
+	a = &stage7c_clients[slot];
+	a->boot_attempted = 1;
+	a->boot_bytes = bytes;
+	a->boot_status = rc;
+	if (!rc) {
+		a->boot_dma_addr = memblock[slot].phy_addr;
+		a->boot_mapped = memblock[slot].hyp_mapping;
+	}
+	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+}
+
+static void stage7c_hyp_result(unsigned int slot, int rc)
+{
+	unsigned long flags;
+
+	if (slot >= MAX_CLIENTS)
+		return;
+	spin_lock_irqsave(&stage7c_audit_lock, flags);
+	if (rc)
+		stage7c_clients[slot].hyp_failure++;
+	else
+		stage7c_clients[slot].hyp_success++;
+	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+}
+
+static int stage7c_stats_get(char *buf, const struct kernel_param *kp)
+{
+	unsigned int i;
+	int len = scnprintf(buf, PAGE_SIZE, "version=1 scope=client_slot_history dma_address_not_pfn=1\n");
+
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		struct stage7c_client_audit a;
+		unsigned long flags;
+
+		spin_lock_irqsave(&stage7c_audit_lock, flags);
+		a = stage7c_clients[i];
+		spin_unlock_irqrestore(&stage7c_audit_lock, flags);
+		if (!a.configured && !a.requests && !a.alloc_attempts)
+			continue;
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+			"slot=%u configured=%u client_id=%u configured_bytes=%u guaranteed=%u boot_attempted=%u boot_bytes=%u boot_status=%d boot_dma=0x%llx boot_mapped=%u requests=%llu max_request_bytes=%u last_request_bytes=%u alloc_attempts=%llu alloc_failures=%llu last_alloc_bytes=%u last_success_dma=0x%llx hyp_success=%llu hyp_failure=%llu\n",
+			i, a.configured, a.client_id, a.configured_bytes,
+			a.guaranteed, a.boot_attempted, a.boot_bytes, a.boot_status,
+			(unsigned long long)a.boot_dma_addr, a.boot_mapped,
+			(unsigned long long)a.requests, a.max_request_bytes,
+			a.last_request_bytes, (unsigned long long)a.alloc_attempts,
+			(unsigned long long)a.alloc_failures, a.last_alloc_bytes,
+			(unsigned long long)a.last_success_dma_addr,
+			(unsigned long long)a.hyp_success,
+			(unsigned long long)a.hyp_failure);
+	}
+	return len;
+}
+static const struct kernel_param_ops stage7c_stats_ops = {
+	.get = stage7c_stats_get,
+};
+module_param_cb(stage7c_memshare_stats, &stage7c_stats_ops, NULL, 0400);
+
 static struct msg_desc mem_share_svc_alloc_req_desc = {
 	.max_msg_len = MEM_ALLOC_REQ_MAX_MSG_LEN_V01,
 	.msg_id = MEM_ALLOC_REQ_MSG_V01,
@@ -673,6 +810,7 @@ static void shared_hyp_mapping(int client_id)
 			source_vmlist, 1, dest_vmids,
 			dest_perms, 2);
 
+	stage7c_hyp_result(client_id, ret);
 	if (ret != 0) {
 		pr_err("memshare: hyp_assign_phys failed size=%u err=%d\n",
 				memblock[client_id].size, ret);
@@ -695,6 +833,7 @@ static int handle_alloc_req(void *req_h, void *req, void *conn_h)
 	pr_debug("%s: Received Alloc Request\n", __func__);
 	pr_debug("%s: req->num_bytes = %d\n", __func__, alloc_req->num_bytes);
 	mutex_lock(&memsh_drv->mem_share);
+	stage7c_request(GPS, alloc_req->num_bytes);
 	if (!memblock[GPS].size) {
 		memset(&alloc_resp, 0, sizeof(struct mem_alloc_resp_msg_v01));
 		alloc_resp.resp = QMI_RESULT_FAILURE_V01;
@@ -769,6 +908,7 @@ static int handle_alloc_generic_req(void *req_h, void *req, void *conn_h)
 		return -EINVAL;
 	}
 
+	stage7c_request(client_id, alloc_req->num_bytes);
 	if (!memblock[client_id].alloted) {
 		if (alloc_req->client_id == 1 && alloc_req->num_bytes > 0)
 			size = alloc_req->num_bytes + MEMSHARE_GUARD_BYTES;
@@ -1137,10 +1277,12 @@ int memshare_alloc(struct device *dev,
 						&pblk->phy_addr, GFP_KERNEL,
 						&attrs);
 	if (pblk->virtual_addr == NULL) {
+		stage7c_alloc_result(pblk, block_size, -ENOMEM);
 		pr_err("allocation failed, %d\n", block_size);
 		ret = -ENOMEM;
 		return ret;
 	}
+	stage7c_alloc_result(pblk, block_size, 0);
 	pr_info("%s: pblk->phy_addr : 0x%lx, pblk->virtual_addr : 0x%lx\n",
 			__func__, (unsigned long int)pblk->phy_addr,
 		  (unsigned long int)pblk->virtual_addr);
@@ -1209,6 +1351,9 @@ static int memshare_child_probe(struct platform_device *pdev)
 		return rc;
 	}
 
+	if (num_clients >= MAX_CLIENTS)
+		return -ENOSPC;
+
 	memblock[num_clients].guarantee = of_property_read_bool(
 							pdev->dev.of_node,
 							"qcom,allocate-boot-time");
@@ -1234,6 +1379,8 @@ static int memshare_child_probe(struct platform_device *pdev)
 
 	memblock[num_clients].size = size;
 	memblock[num_clients].client_id = client_id;
+	stage7c_configure(num_clients, client_id, size,
+			  memblock[num_clients].guarantee);
 
   /*
    *	Memshare allocation for guaranteed clients
@@ -1245,12 +1392,14 @@ static int memshare_child_probe(struct platform_device *pdev)
 				size,
 				&memblock[num_clients]);
 		if (rc) {
+			stage7c_boot_result(num_clients, size, rc);
 			pr_err("In %s, Unable to allocate memory for guaranteed clients, rc: %d\n",
 							__func__, rc);
 			return rc;
 		}
 		memblock[num_clients].alloted = 1;
 		shared_hyp_mapping(num_clients);
+		stage7c_boot_result(num_clients, size, 0);
 	}
 
 	/*
