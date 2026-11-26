@@ -4999,7 +4999,7 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 		KGSL_MEMSTORE_SIZE, 0, KGSL_MEMDESC_CONTIG, "memstore");
 
 	if (status != 0)
-		goto error_close_mmu;
+		goto error_exit_pools;
 
 	/*
 	 * The default request type PM_QOS_REQ_ALL_CORES is
@@ -5046,6 +5046,8 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 
 	return 0;
 
+error_exit_pools:
+	kgsl_exit_page_pools();
 error_close_mmu:
 	kgsl_mmu_close(device);
 error_pwrctrl_close:
