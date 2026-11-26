@@ -691,6 +691,7 @@ static int __f2fs_setxattr(struct inode *inode, int index,
 	if (size > MAX_VALUE_LEN(inode))
 		return -E2BIG;
 
+#ifdef CONFIG_PROC_FSLOG
 	if (!strcmp(name, "selinux")) {
 		if (!value || !strcmp(value, "") ||
 				strstr(value, "unlabeled")) {
@@ -700,6 +701,7 @@ static int __f2fs_setxattr(struct inode *inode, int index,
 			fslog_kmsg_selog(__func__, 12);
 		}			
 	}
+#endif
 
 	error = read_all_xattrs(inode, ipage, &base_addr);
 	if (error)
