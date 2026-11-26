@@ -1,0 +1,51 @@
+Tab S4 Stage 7A/B/C — experimental Wi-Fi memory-footprint follow-up
+
+Baseline 51dc444a97b9d234aa5d21cad2f3b90aa1ce78e1 (Stage 7 reviewed).
+No new branch. Stage 6 and KGSL behavior are unchanged.
+
+7A:
+The SM-T830 live camera carveout at 0xc0000000, 0x11800000 bytes
+(71680 4 KiB pages) was fully PG_reserved. The matching legacy RBIN ION
+heap is unsupported. CONFIG_TAB_S4_STAGE7A is enabled in the Wi-Fi
+defconfig, not LTE. Guarded bypass before page allocator initialization:
+exact bootloader model token, matching FDT root and reservation, size,
+memory membership, no existing memblock overlap, and exactly one
+memory-region reference from the known RBIN heap. Skip the matching ION
+child in both counting and population only on successful bypass.
+The original FDT is not modified. Other reserved regions are unchanged.
+The read-only stage7a_camera_released parameter reports bypass, not a
+promise of the exact amount of additional MemTotal. Check physical page
+flags, camera preview/still/video, Wi-Fi, GPS, media and suspend/resume.
+Unknown independent firmware use is not ruled out by a DT audit.
+Fallback: original boot image, CONFIG_TAB_S4_STAGE7A=n, or early boot
+parameter tab_s4_stage7a=0 if the bootloader permits it.
+
+7B:
+VmLck is virtual accounting, not additive physical locked RAM. The
+supplied 10.37 GiB VmLck on a 4 GiB tablet is not proof of physical
+reservation. scripts/tab_s4_stage7b_pinner_audit.sh collects Pinner
+inventory, actual system mlock totals and process accounting.
+The companion host script has independent reversible Android
+DeviceConfig experiments for a confirmed Pinner camera group
+(runtime_native_boot/pin_camera=false, cmd pinner repin) or confirmed
+experimental anonymous region (runtime_native/pin_shared_anon_size=0).
+It saves the exact original value including absence, verifies readback
+and actual pin inventory, and refuses unknown/unconfirmed settings.
+Do not globally disable mlock, reduce RLIMIT_MEMLOCK or modify SELinux.
+ROM-specific Pinner support is not yet validated. File pins outside
+the two supported experimental controls are observation only.
+
+7C:
+The live modem subsystem is ONLINE even on the Wi-Fi tablet. Both
+120 MiB firmware and 96 MiB shared carveouts and the 2 MiB MBA region
+are preserved. Boot guaranteed clients and hypervisor ownership cannot
+safely be inferred from the LTE radio's absence. Root-only
+stage7c_memshare_stats exposes per-slot boot request, DMA address,
+allocation failures, actual generic/legacy request counts, maximum
+requested size and mapping results. A DMA address is not assumed to be
+a PFN. Last allocation addresses are history, not current ownership.
+No automatic modem reduction or changed firmware requests. Inspect
+client ID 3 after normal use, WLAN/GPS/Bluetooth and suspend/resume,
+then compare DMA placement and firmware requirements before resizing.
+
+Native kernel compilation and on-device functionality are required.
