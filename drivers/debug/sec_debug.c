@@ -227,14 +227,18 @@ DEFINE_PER_CPU(enum sec_debug_upload_cause_t, sec_debug_upload_cause);
 /* save last_pet and last_ns with these nice functions */
 void sec_debug_save_last_pet(unsigned long long last_pet)
 {
-	if(secdbg_log)
+#ifdef CONFIG_SEC_DEBUG_SCHED_LOG
+	if (secdbg_log)
 		secdbg_log->last_pet = last_pet;
+#endif
 }
 
 void sec_debug_save_last_ns(unsigned long long last_ns)
 {
-	if(secdbg_log)
+#ifdef CONFIG_SEC_DEBUG_SCHED_LOG
+	if (secdbg_log)
 		atomic64_set(&(secdbg_log->last_ns), last_ns);
+#endif
 }
 EXPORT_SYMBOL(sec_debug_save_last_pet);
 EXPORT_SYMBOL(sec_debug_save_last_ns);
