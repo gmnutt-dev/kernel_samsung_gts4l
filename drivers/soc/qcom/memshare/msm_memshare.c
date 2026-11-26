@@ -71,11 +71,12 @@ static struct mem_blocks memblock[MAX_CLIENTS];
 static uint32_t num_clients;
 
 /* Stage 7C: read-only event-directed evidence, not a new allocation policy.
- * Slot indexes are internal memblock indexes, not QMI client IDs.
+ * Indexed by modem QMI client ID (0..MAX_CLIENTS-1), so a failed
+ * probe followed by reuse of its internal slot cannot erase its history.
  * DMA addresses are as returned by dma_alloc_attrs, not assumed PFNs.
  */
 struct stage7c_client_audit {
-	u32 configured, client_id, configured_bytes, guaranteed;
+	u32 configured, client_id, configured_bytes, guaranteed, last_slot;
 	u32 boot_attempted, boot_bytes, boot_mapped;
 	int boot_status;
 	u64 boot_dma_addr;
@@ -86,18 +87,27 @@ struct stage7c_client_audit {
 static struct stage7c_client_audit stage7c_clients[MAX_CLIENTS];
 static DEFINE_SPINLOCK(stage7c_audit_lock);
 
+static unsigned int stage7c_index(unsigned int slot)
+{
+	if (slot >= MAX_CLIENTS ||
+	    memblock[slot].peripheral != DHMS_MEM_PROC_MPSS_V01 ||
+	    memblock[slot].client_id >= MAX_CLIENTS)
+		return MAX_CLIENTS;
+	return memblock[slot].client_id;
+}
+
 static void stage7c_configure(unsigned int slot, u32 id, u32 size, bool guarantee)
 {
 	unsigned long flags;
 	struct stage7c_client_audit *a;
 
-	if (slot >= MAX_CLIENTS)
+	if (stage7c_index(slot) != id || id >= MAX_CLIENTS)
 		return;
 	spin_lock_irqsave(&stage7c_audit_lock, flags);
-	a = &stage7c_clients[slot];
-	memset(a, 0, sizeof(*a));
+	a = &stage7c_clients[id];
 	a->configured = 1;
 	a->client_id = id;
+	a->last_slot = slot;
 	a->configured_bytes = size;
 	a->guaranteed = guarantee;
 	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
@@ -108,10 +118,12 @@ static void stage7c_request(unsigned int slot, u32 bytes)
 	unsigned long flags;
 	struct stage7c_client_audit *a;
 
-	if (slot >= MAX_CLIENTS)
+	unsigned int id = stage7c_index(slot);
+
+	if (id >= MAX_CLIENTS)
 		return;
 	spin_lock_irqsave(&stage7c_audit_lock, flags);
-	a = &stage7c_clients[slot];
+	a = &stage7c_clients[id];
 	a->requests++;
 	a->last_request_bytes = bytes;
 	a->max_request_bytes = max(a->max_request_bytes, bytes);
@@ -126,7 +138,9 @@ static void stage7c_alloc_result(struct mem_blocks *pblk, u32 bytes, int rc)
 
 	if (pblk < memblock || pblk >= memblock + MAX_CLIENTS)
 		return;
-	slot = pblk - memblock;
+	slot = stage7c_index(pblk - memblock);
+	if (slot >= MAX_CLIENTS)
+		return;
 	spin_lock_irqsave(&stage7c_audit_lock, flags);
 	a = &stage7c_clients[slot];
 	a->alloc_attempts++;
@@ -143,13 +157,17 @@ static void stage7c_boot_result(unsigned int slot, u32 bytes, int rc)
 	unsigned long flags;
 	struct stage7c_client_audit *a;
 
-	if (slot >= MAX_CLIENTS)
+	unsigned int id = stage7c_index(slot);
+
+	if (id >= MAX_CLIENTS)
 		return;
 	spin_lock_irqsave(&stage7c_audit_lock, flags);
-	a = &stage7c_clients[slot];
+	a = &stage7c_clients[id];
 	a->boot_attempted = 1;
 	a->boot_bytes = bytes;
 	a->boot_status = rc;
+	a->boot_dma_addr = 0;
+	a->boot_mapped = 0;
 	if (!rc) {
 		a->boot_dma_addr = memblock[slot].phy_addr;
 		a->boot_mapped = memblock[slot].hyp_mapping;
@@ -161,20 +179,22 @@ static void stage7c_hyp_result(unsigned int slot, int rc)
 {
 	unsigned long flags;
 
-	if (slot >= MAX_CLIENTS)
+	unsigned int id = stage7c_index(slot);
+
+	if (id >= MAX_CLIENTS)
 		return;
 	spin_lock_irqsave(&stage7c_audit_lock, flags);
 	if (rc)
-		stage7c_clients[slot].hyp_failure++;
+		stage7c_clients[id].hyp_failure++;
 	else
-		stage7c_clients[slot].hyp_success++;
+		stage7c_clients[id].hyp_success++;
 	spin_unlock_irqrestore(&stage7c_audit_lock, flags);
 }
 
 static int stage7c_stats_get(char *buf, const struct kernel_param *kp)
 {
 	unsigned int i;
-	int len = scnprintf(buf, PAGE_SIZE, "version=1 scope=client_slot_history dma_address_not_pfn=1\n");
+	int len = scnprintf(buf, PAGE_SIZE, "version=2 scope=modem_client_id_history dma_address_not_pfn=1\n");
 
 	for (i = 0; i < MAX_CLIENTS; i++) {
 		struct stage7c_client_audit a;
@@ -187,7 +207,7 @@ static int stage7c_stats_get(char *buf, const struct kernel_param *kp)
 			continue;
 		len += scnprintf(buf + len, PAGE_SIZE - len,
 			"slot=%u configured=%u client_id=%u configured_bytes=%u guaranteed=%u boot_attempted=%u boot_bytes=%u boot_status=%d boot_dma=0x%llx boot_mapped=%u requests=%llu max_request_bytes=%u last_request_bytes=%u alloc_attempts=%llu alloc_failures=%llu last_alloc_bytes=%u last_success_dma=0x%llx hyp_success=%llu hyp_failure=%llu\n",
-			i, a.configured, a.client_id, a.configured_bytes,
+			a.last_slot, a.configured, i, a.configured_bytes,
 			a.guaranteed, a.boot_attempted, a.boot_bytes, a.boot_status,
 			(unsigned long long)a.boot_dma_addr, a.boot_mapped,
 			(unsigned long long)a.requests, a.max_request_bytes,
