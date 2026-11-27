@@ -151,6 +151,8 @@ struct psi_group {
 
 	/* Protects data used by the monitor */
 	struct mutex trigger_lock;
+	/* Serializes worker replacement with final RCU/cancel/destroy. */
+	struct mutex trigger_lifecycle_lock;
 
 	/* Configured polling triggers */
 	struct list_head triggers;
