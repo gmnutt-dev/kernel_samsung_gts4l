@@ -811,6 +811,16 @@ config TAB_S4_STAGE7A
 	  Requires hardware validation. Never release secure camera memory.
 	  Disable at boot with tab_s4_stage7a=0, or build with this off.
 
+config TAB_S4_STAGE7D_DEFAULT
+	bool "Tab S4 opt-in release of handed-off display splash memory"
+	depends on TAB_S4_STAGE7A && FB_MSM_MDSS_SAMSUNG && SEC_DEBUG
+	default n
+	help
+	  Experimental release only in the existing MDSS cleanup path.
+	  Requires exact relocated live device tree range and reserved-page
+	  checks. Keep off until validating splash ownership on SM-T830.
+	  Override at boot with tab_s4_stage7d=0 or tab_s4_stage7d=1.
+
 config TAB_S4_STAGE6I
 	bool "Tab S4 opt-in latency histograms"
 	depends on MMU && SWAP && PROC_FS
