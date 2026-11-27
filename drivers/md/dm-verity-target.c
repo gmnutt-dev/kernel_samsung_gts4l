@@ -45,6 +45,12 @@ module_param_named(prefetch_cluster, dm_verity_prefetch_cluster, uint, S_IRUGO |
 
 extern int ignore_fs_panic;
 
+#ifdef SEC_HEX_DEBUG
+/* Keep corruption/FEC handling intact; only suppress routine block reports. */
+static bool stage7e_periodic_stats = !IS_ENABLED(CONFIG_TAB_S4_STAGE7A);
+module_param_named(stage7e_periodic_stats, stage7e_periodic_stats, bool, 0400);
+#endif
+
 #ifdef DMV_ALTA
 /* Verity bitmap. Each bit represents one block and will be set when integrity
  * on that block is verified.
@@ -482,7 +488,8 @@ static int verity_verify_io(struct dm_verity_io *io)
 		    likely(test_bit(cur_block, v->validated_blocks))) {
 			verity_bv_skip_block(v, io, &io->iter);
 #ifdef SEC_HEX_DEBUG
-			add_skipped_blks();
+			if (stage7e_periodic_stats)
+				add_skipped_blks();
 #endif
 			continue;
 		}
@@ -752,11 +759,12 @@ int verity_map(struct dm_target *ti, struct bio *bio)
 	io->n_blocks = bio->bi_iter.bi_size >> v->data_dev_block_bits;
 	
 #ifdef SEC_HEX_DEBUG
-	add_total_blks(io->n_blocks);
-	
-	if (get_total_blks() - get_prev_total_blks() > 0x4000){
-	    set_prev_total_blks(get_total_blks());
-	    print_blks_cnt(v->data_dev->name);
+	if (stage7e_periodic_stats) {
+		add_total_blks(io->n_blocks);
+		if (get_total_blks() - get_prev_total_blks() > 0x4000) {
+			set_prev_total_blks(get_total_blks());
+			print_blks_cnt(v->data_dev->name);
+		}
 	}
 #endif
 
