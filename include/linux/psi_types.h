@@ -120,6 +120,9 @@ struct psi_trigger {
 	 * events to one per window
 	 */
 	u64 last_event_time;
+	pid_t stage7i_creator;
+	char stage7i_comm[16];
+	atomic64_t stage7i_signaled, stage7i_consumed;
 };
 
 struct psi_group {
