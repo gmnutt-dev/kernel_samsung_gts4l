@@ -270,6 +270,8 @@ struct kgsl_memdesc {
  */
 struct kgsl_mem_entry {
 	struct kref refcount;
+	u64 stage7h_birth_ns;
+	u64 stage7h_committed_bytes;
 	struct kgsl_memdesc memdesc;
 	void *priv_data;
 	struct rb_node node;
