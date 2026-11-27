@@ -559,8 +559,10 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
-			if (stage7i_mem_trigger(t))
+			if (stage7i_mem_trigger(t)) {
 				atomic64_inc(&stage7i_signaled);
+				atomic64_inc(&t->stage7i_signaled);
+			}
 			trace_psi_update_trigger_wake_up(t, growth);
 			wake_up_interruptible(&t->event_wait);
 		} else if (stage7i_mem_trigger(t)) {
@@ -1074,6 +1076,10 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 
 	t->event = 0;
 	t->last_event_time = 0;
+	t->stage7i_creator = task_tgid_nr(current);
+	get_task_comm(t->stage7i_comm, current);
+	atomic64_set(&t->stage7i_signaled, 0);
+	atomic64_set(&t->stage7i_consumed, 0);
 	init_waitqueue_head(&t->event_wait);
 
 	mutex_lock(&group->trigger_lock);
@@ -1199,8 +1205,10 @@ unsigned int psi_trigger_poll(void **trigger_ptr, struct file *file,
 	poll_wait(file, &t->event_wait, wait);
 
 	if (cmpxchg(&t->event, 1, 0) == 1) {
-		if (stage7i_mem_trigger(t))
+		if (stage7i_mem_trigger(t)) {
 			atomic64_inc(&stage7i_consumed);
+			atomic64_inc(&t->stage7i_consumed);
+		}
 		ret |= POLLPRI;
 	}
 
@@ -1313,6 +1321,9 @@ static const struct file_operations psi_cpu_fops = {
 
 static int stage7i_psi_show(struct seq_file *m, void *v)
 {
+	struct psi_trigger *t;
+	unsigned int count = 0;
+
 	seq_printf(m, "created=%lld destroyed=%lld signaled=%lld consumed=%lld coalesced=%lld create_failed=%lld\n",
 		   (long long)atomic64_read(&stage7i_created),
 		   (long long)atomic64_read(&stage7i_destroyed),
@@ -1320,6 +1331,27 @@ static int stage7i_psi_show(struct seq_file *m, void *v)
 		   (long long)atomic64_read(&stage7i_consumed),
 		   (long long)atomic64_read(&stage7i_coalesced),
 		   (long long)atomic64_read(&stage7i_write_failed));
+	if (!mutex_trylock(&psi_system.trigger_lock)) {
+		seq_puts(m, "triggers_busy\n");
+		return 0;
+	}
+	list_for_each_entry(t, &psi_system.triggers, node) {
+		if (!stage7i_mem_trigger(t))
+			continue;
+		if (count++ >= 64) {
+			seq_puts(m, "triggers_truncated\n");
+			break;
+		}
+		seq_printf(m, "trigger creator_tgid=%d comm=%s state=%s threshold_ns=%llu window_ns=%llu trigger_signaled=%lld trigger_consumed=%lld pending=%d\n",
+			   t->stage7i_creator, t->stage7i_comm,
+			   t->state == PSI_MEM_FULL ? "full" : "some",
+			   (unsigned long long)t->threshold,
+			   (unsigned long long)t->win.size,
+			   (long long)atomic64_read(&t->stage7i_signaled),
+			   (long long)atomic64_read(&t->stage7i_consumed),
+			   READ_ONCE(t->event));
+	}
+	mutex_unlock(&psi_system.trigger_lock);
 	return 0;
 }
 static int stage7i_psi_open(struct inode *inode, struct file *file)
