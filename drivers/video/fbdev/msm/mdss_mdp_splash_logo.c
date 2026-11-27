@@ -347,7 +347,8 @@ static void stage7d_release_splash(struct msm_fb_data_type *mfd,
 
 	if (stage7d_enabled && tab_s4_stage7a_camera_released &&
 	    addr == 0x9d400000 && size == 0x02400000) {
-		if (!handoff_ok || mfd->splash_info.iommu_dynamic_attached ||
+		if (!handoff_ok || mfd->index != 0 ||
+		    mfd->splash_info.iommu_dynamic_attached ||
 		    !stage7d_dt_matches(mfd, addr, size))
 			return;
 		mutex_lock(&stage7d_lock);
@@ -358,7 +359,8 @@ static void stage7d_release_splash(struct msm_fb_data_type *mfd,
 			goto unlock;
 		end = ((unsigned long)addr + size) >> PAGE_SHIFT;
 		for (pfn = addr >> PAGE_SHIFT; pfn < end; pfn++)
-			if (!pfn_valid(pfn) || !PageReserved(pfn_to_page(pfn)))
+			if (!pfn_valid(pfn) || !memblock_is_reserved(PFN_PHYS(pfn)) ||
+			    !PageReserved(pfn_to_page(pfn)))
 				goto unlock;
 		if (memblock_free(addr, size))
 			goto unlock;
@@ -384,6 +386,7 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 	struct mdss_overlay_private *mdp5_data;
 	struct mdss_mdp_ctl *ctl;
 	int rc = 0;
+	int wait_rc = 0, finish_rc;
 
 	if (!mfd)
 		return -EINVAL;
@@ -402,8 +405,9 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 			use_borderfill) {
 			mdss_mdp_splash_unmap_splash_mem(mfd);
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
+			/* Dynamic unmap has no status return; retain this experimental region. */
 			stage7d_release_splash(mfd, mdp5_data->splash_mem_addr,
-					mdp5_data->splash_mem_size, true);
+					mdp5_data->splash_mem_size, false);
 #else
 			memblock_free(mdp5_data->splash_mem_addr,
 					mdp5_data->splash_mem_size);
@@ -432,7 +436,7 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 		if (mdp5_data->handoff && ctl && ctl->is_video_mode) {
 			rc = mdss_mdp_display_commit(ctl, NULL, NULL);
 			if (!IS_ERR_VALUE(rc)) {
-				mdss_mdp_display_wait4comp(ctl);
+				wait_rc = mdss_mdp_display_wait4comp(ctl);
 			} else {
 				/*
 				 * Since border-fill setup failed, we
@@ -453,13 +457,13 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 		mdss_mdp_handoff_cleanup_pipes(mfd, MDSS_MDP_PIPE_TYPE_DMA);
 	}
 
-	mdss_mdp_ctl_splash_finish(ctl, mdp5_data->handoff);
+	finish_rc = mdss_mdp_ctl_splash_finish(ctl, mdp5_data->handoff);
 
 	if (mdp5_data->splash_mem_addr &&
 	!mfd->splash_info.iommu_dynamic_attached) {
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
 		stage7d_release_splash(mfd, mdp5_data->splash_mem_addr,
-				mdp5_data->splash_mem_size, !rc);
+				mdp5_data->splash_mem_size, !rc && !wait_rc && !finish_rc);
 #else
 		/* Give back the reserved memory to the system */
 		memblock_free(mdp5_data->splash_mem_addr,
