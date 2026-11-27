@@ -1,0 +1,88 @@
+Tab S4 Stage 7D-I (SM-T830, Android 17, 4.4.302-cip112)
+================================================================
+Based on existing Stage7ABC branch; no new branch. Retain the validated
+Stage7A camera/RBIN recovery and the independent Stage7B Pinner RRO.
+
+7D: opt-in splash memory release. Previous live boot capture shows
+/reserved-memory/splash_region@9d600000/reg = 0x9d400000, 0x02400000
+(36 MiB), not the DTS unit address. Do not release 0x9d600000:
+it overlaps the adjacent TIMA region in that live layout. Confirm the
+live DT and PG_reserved count (9216 pages) before opt-in. Release only
+on primary framebuffer, existing normal MDSS handoff cleanup, successful
+commit/wait/finish, exact phandle and range, no no-map/reusable flag,
+no sibling reserved-memory overlap, and all PFNs valid and reserved.
+Serialize and prevent duplicate release. Dynamic unmap has no success
+return, so experimental bypass is not enabled on that path. If splash
+is already disabled, retain original Samsung policy. Boot default OFF;
+TAB_S4_STAGE7D_DEFAULT=y is opt-in; tab_s4_stage7d=0 overrides.
+No promise of recovery if the driver never reaches a valid release point.
+Read /sys/module/*/parameters/stage7d_{enabled,released_pages}.
+Verify displays, suspend/resume, reboot, camera and graphics separately.
+
+7E: suppress hot-path Samsung periodic block instrumentation (SEC_HEX_DEBUG)
+on WiFi Stage7A configuration. Retain verification, hash/FEC handling,
+corruption counters, original error reporting, verified-block policy.
+Boot parameter stage7e_periodic_stats=1 (dm-verity module prefix) restores
+routine reporting. No debug/secure physical carveouts are released:
+prior live tree has 4 MiB ss_plog and 4 MiB sec_debug_low_region, both no-map.
+The 96 MiB modem_shared source reservation was absent in the live tree.
+Neither is proven reclaimable. Do not free firmware/modem/secure regions.
+
+7F: correct Locked PSS per VMA and rollup: accumulate delta of PSS only
+for VM_LOCKED, print pss_locked. Enable CONFIG_SLUB_DEBUG, which supplies
+CONFIG_SLABINFO; do not enable default runtime sanity/poison/redzone flags.
+This has metadata/code-size cost. Keep debug flags disabled at boot.
+No change to mlock, PinnerService or LMKD process-lock semantics.
+
+7G: /sys/module/zram/parameters/stage7g_percent = 0 (ROM) or 50..100.
+On matching SM-T830 Stage7A boot, only zram0's disksize initialization
+is overridden; page-align logical size based on totalram_pages. Existing
+init_lock and EBUSY handling remain. No swapoff/reset or active resize.
+stage7g_last_applied_percent records the last successful init, NOT a
+pending setting. Kernel default 0. Magisk module from kernel-lab sets
+the selected value before boot initialization; observed ROM uses
+swapon_all on sys.boot_completed=1. If the script runs too late it
+does not resize and reports too_late. Kernel command-line fallback
+zram.stage7g_percent=75 may be used as separate boot experiment;
+disable that fallback before using the module for ROM sizing.
+
+7H: per-heap ION cumulative successful allocations, actual destruction,
+failures, byte totals and destruction age counts >=1s and >=30s in
+/sys/kernel/debug/ion/heaps/*; total system heap is unique live ION buffers
+while client attribution can overlap. KGSL committed and destroyed
+logical object bytes (including imports/shared/sparse), not physical
+RAM, at /sys/module/*/parameters/stage7h_kgsl_stats. Do not sum ION and
+KGSL logical values. No forced frees, no changes to DMA ownership or
+vendor OMX binaries. Capture before/during/after several ads and compare
+media.codec/media.resource_manager and ION per-client totals.
+
+7I: preserve full PSI trigger input rather than discard final digit on
+non-NUL-terminated writes. Bound writes to 32 bytes, terminate separately.
+Serialize trigger creation and final poll worker teardown across RCU/
+cancel/destroy using separate lifecycle lock, never acquired by poll work.
+Preserve threshold and scheduling policy. /proc/tab_s4_stage7i_psi (root)
+reports cumulative system memory trigger create/destroy/signal/consume/
+coalesce/fail counts and up to 64 active triggers with creator TGID,
+comm, state, threshold/window ns, per-trigger signal and consume counts.
+Consume = kernel poll callback cleared the pending event; it is not proof
+that LMKD decided to kill or handled the event in userspace. A monitor
+may close/re-register; track PID and lifecycle. Check LMKD fd symlinks,
+effective device_config and logs; do not assume event delivery from PSI
+averages alone. Do not change OOM scores, watchdog limits, LMKD settings
+or introduce forced kills.
+
+Native validation:
+  1. First build default Stage7D off, retain current Stage7B module.
+     Verify boot/camera/graphics/WiFi, /proc/slabinfo, smaps Locked, PSI.
+  2. Baseline 50% ROM sizing then install independent Stage7G Magisk
+     module (75% default), reboot, verify actual /proc/swaps and disksize.
+     Change slider or restore ROM through Kernel Lab, reboot and verify.
+  3. Compare before/during/after ads. Record memory, swap, PSI, vmstat,
+     KGSL and ION lifetime counts, LMKD fds, crash logs.
+  4. Separate Stage7D opt-in build only after live DT/PG_reserved audit;
+     verify 9216 pages released or no change, never force release.
+  5. Disable module and reboot to restore ROM zRAM. Reflash previous
+     verified boot image if kernel regression. No automatic flashing.
+
+The changes are source-reviewed but require native cross-compilation
+and device validation. No confirmed new memory recovery is claimed.
