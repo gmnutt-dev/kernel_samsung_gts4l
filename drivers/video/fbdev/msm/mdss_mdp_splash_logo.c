@@ -263,7 +263,7 @@ void mdss_free_bootmem(u32 mem_addr, u32 size)
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
 #ifdef CONFIG_TAB_S4_STAGE7A
 extern bool tab_s4_stage7a_camera_released;
-static bool stage7d_enabled;
+static bool stage7d_enabled = IS_ENABLED(CONFIG_TAB_S4_STAGE7D_DEFAULT);
 static unsigned int stage7d_released_pages;
 static DEFINE_MUTEX(stage7d_lock);
 module_param_named(stage7d_released_pages, stage7d_released_pages, uint, 0444);
@@ -277,18 +277,78 @@ static int __init stage7d_setup(char *arg)
 	return 0;
 }
 early_param("tab_s4_stage7d", stage7d_setup);
+
+/* Live SM-T830 FDT relocates this named region to 0x9d400000.
+ * The source DTS address 0x9d600000 is not a safe substitute. */
+static bool stage7d_dt_matches(struct msm_fb_data_type *mfd, u32 addr, u32 size)
+{
+	struct device_node *child, *node, *parent, *other;
+	const __be32 *reg;
+	u64 bytes, start;
+	int i;
+	bool match = false;
+
+	child = of_get_child_by_name(mfd->pdev->dev.of_node,
+				     "qcom,cont-splash-memory");
+	if (!child)
+		return false;
+	node = of_parse_phandle(child, "linux,contiguous-region", 0);
+	of_node_put(child);
+	if (!node)
+		return false;
+	if (strcmp(node->full_name, "/reserved-memory/splash_region@9d600000") ||
+	    of_property_read_bool(node, "no-map") ||
+	    of_property_read_bool(node, "reusable") ||
+	    of_n_addr_cells(node) != 2)
+		goto out;
+	reg = of_get_address(node, 0, &bytes, NULL);
+	if (!reg || of_read_number(reg, 2) != addr || bytes != size ||
+	    of_get_address(node, 1, NULL, NULL))
+		goto out;
+	parent = of_get_parent(node);
+	if (!parent)
+		goto out;
+	match = true;
+	for_each_child_of_node(parent, other) {
+		if (other == node)
+			continue;
+		if (of_n_addr_cells(other) != 2) {
+			match = false;
+			of_node_put(other);
+			break;
+		}
+		for (i = 0; (reg = of_get_address(other, i, &bytes, NULL)); i++) {
+			start = of_read_number(reg, 2);
+			if (bytes && (start + bytes < start ||
+			    (start < (u64)addr + size && (u64)addr < start + bytes))) {
+				match = false;
+				break;
+			}
+		}
+		if (!match) {
+			of_node_put(other);
+			break;
+		}
+	}
+	of_node_put(parent);
+out:
+	of_node_put(node);
+	return match;
+}
 #endif
 
 /* Called only at the driver's existing splash-release points. No late
  * asynchronous release and no change to secure/debug carveouts. */
-static void stage7d_release_splash(u32 addr, u32 size, bool handoff_ok)
+static void stage7d_release_splash(struct msm_fb_data_type *mfd,
+				   u32 addr, u32 size, bool handoff_ok)
 {
 #ifdef CONFIG_TAB_S4_STAGE7A
 	unsigned long pfn, end;
 
 	if (stage7d_enabled && tab_s4_stage7a_camera_released &&
-	    addr == 0x9d600000 && size == 0x02400000) {
-		if (!handoff_ok)
+	    addr == 0x9d400000 && size == 0x02400000) {
+		if (!handoff_ok || mfd->splash_info.iommu_dynamic_attached ||
+		    !stage7d_dt_matches(mfd, addr, size))
 			return;
 		mutex_lock(&stage7d_lock);
 		if (stage7d_released_pages)
@@ -342,7 +402,7 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 			use_borderfill) {
 			mdss_mdp_splash_unmap_splash_mem(mfd);
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
-			stage7d_release_splash(mdp5_data->splash_mem_addr,
+			stage7d_release_splash(mfd, mdp5_data->splash_mem_addr,
 					mdp5_data->splash_mem_size, true);
 #else
 			memblock_free(mdp5_data->splash_mem_addr,
@@ -398,7 +458,7 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 	if (mdp5_data->splash_mem_addr &&
 	!mfd->splash_info.iommu_dynamic_attached) {
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
-		stage7d_release_splash(mdp5_data->splash_mem_addr,
+		stage7d_release_splash(mfd, mdp5_data->splash_mem_addr,
 				mdp5_data->splash_mem_size, !rc);
 #else
 		/* Give back the reserved memory to the system */
@@ -790,7 +850,7 @@ error:
 		/* If continuous splash is disabled, preserve the original policy.
 		 * The experimental release requires the actual cleanup path. */
 		if (!sec_debug_is_enabled())
-			stage7d_release_splash(mdp5_mdata->splash_mem_addr,
+			stage7d_release_splash(mfd, mdp5_mdata->splash_mem_addr,
 					mdp5_mdata->splash_mem_size, true);
 #else
 		memblock_free(mdp5_mdata->splash_mem_addr,
