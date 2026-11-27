@@ -12,6 +12,8 @@
  *
  */
 #include <linux/module.h>
+#include <linux/ktime.h>
+#include <linux/atomic.h>
 #include <linux/fb.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -335,6 +337,30 @@ static void kgsl_destroy_anon(struct kgsl_memdesc *memdesc)
 	}
 }
 
+/* Logical GPU object bytes, including imports; not unique physical RAM. */
+static atomic64_t stage7h_kgsl_commits = ATOMIC64_INIT(0);
+static atomic64_t stage7h_kgsl_destroys = ATOMIC64_INIT(0);
+static atomic64_t stage7h_kgsl_commit_bytes = ATOMIC64_INIT(0);
+static atomic64_t stage7h_kgsl_destroy_bytes = ATOMIC64_INIT(0);
+static atomic64_t stage7h_kgsl_destroy_ge1s = ATOMIC64_INIT(0);
+static atomic64_t stage7h_kgsl_destroy_ge30s = ATOMIC64_INIT(0);
+
+static int stage7h_kgsl_get(char *buf, const struct kernel_param *kp)
+{
+	return scnprintf(buf, PAGE_SIZE,
+		"commits=%lld destroys=%lld commit_bytes=%lld destroy_bytes=%lld destroy_ge1s=%lld destroy_ge30s=%lld\n",
+		(long long)atomic64_read(&stage7h_kgsl_commits),
+		(long long)atomic64_read(&stage7h_kgsl_destroys),
+		(long long)atomic64_read(&stage7h_kgsl_commit_bytes),
+		(long long)atomic64_read(&stage7h_kgsl_destroy_bytes),
+		(long long)atomic64_read(&stage7h_kgsl_destroy_ge1s),
+		(long long)atomic64_read(&stage7h_kgsl_destroy_ge30s));
+}
+static const struct kernel_param_ops stage7h_kgsl_ops = {
+	.get = stage7h_kgsl_get,
+};
+module_param_cb(stage7h_kgsl_stats, &stage7h_kgsl_ops, NULL, 0444);
+
 void
 kgsl_mem_entry_destroy(struct kref *kref)
 {
@@ -357,7 +383,17 @@ kgsl_mem_entry_destroy(struct kref *kref)
 			&kgsl_driver.stats.mapped);
 
 	kgsl_sharedmem_free(&entry->memdesc);
+	if (entry->stage7h_birth_ns) {
+		u64 age = ktime_get_ns() - entry->stage7h_birth_ns;
 
+		atomic64_inc(&stage7h_kgsl_destroys);
+		atomic64_add(entry->stage7h_committed_bytes,
+			     &stage7h_kgsl_destroy_bytes);
+		if (age >= NSEC_PER_SEC)
+			atomic64_inc(&stage7h_kgsl_destroy_ge1s);
+		if (age >= 30ULL * NSEC_PER_SEC)
+			atomic64_inc(&stage7h_kgsl_destroy_ge30s);
+	}
 	kfree(entry);
 }
 EXPORT_SYMBOL(kgsl_mem_entry_destroy);
@@ -391,6 +427,13 @@ static void kgsl_mem_entry_commit_process(struct kgsl_mem_entry *entry)
 		return;
 
 	spin_lock(&entry->priv->mem_lock);
+	if (!entry->stage7h_birth_ns) {
+		entry->stage7h_birth_ns = ktime_get_ns();
+		entry->stage7h_committed_bytes = entry->memdesc.size;
+		atomic64_inc(&stage7h_kgsl_commits);
+		atomic64_add(entry->stage7h_committed_bytes,
+			     &stage7h_kgsl_commit_bytes);
+	}
 	idr_replace(&entry->priv->mem_idr, entry, entry->id);
 	spin_unlock(&entry->priv->mem_lock);
 }
