@@ -16,6 +16,8 @@
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
 #include <linux/module.h>
+#include <linux/math64.h>
+#include <linux/mm.h>
 #include <linux/kernel.h>
 #include <linux/overflow.h>
 #include <linux/bio.h>
@@ -46,6 +48,14 @@ static const char *default_compressor = CONFIG_ZRAM_DEFAULT_COMP_ALGORITHM;
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
+#ifdef CONFIG_TAB_S4_STAGE7A
+extern bool tab_s4_stage7a_camera_released;
+/* Zero preserves the ROM setting. Only the next initialization is affected. */
+static unsigned int stage7g_percent;
+static unsigned int stage7g_last_applied_percent;
+module_param_named(stage7g_percent, stage7g_percent, uint, 0600);
+module_param_named(stage7g_last_applied_percent, stage7g_last_applied_percent, uint, 0444);
+#endif
 /*
  * Pages that compress to sizes equals or greater than this are stored
  * uncompressed in memory.
@@ -1842,6 +1852,9 @@ static ssize_t disksize_store(struct device *dev,
 	struct zcomp *comp;
 	struct zram *zram = dev_to_zram(dev);
 	int err;
+#ifdef CONFIG_TAB_S4_STAGE7A
+	unsigned int percent = 0;
+#endif
 
 	disksize = memparse(buf, NULL);
 	if (!disksize)
@@ -1854,6 +1867,16 @@ static ssize_t disksize_store(struct device *dev,
 		goto out_unlock;
 	}
 
+#ifdef CONFIG_TAB_S4_STAGE7A
+	if (tab_s4_stage7a_camera_released && !zram->disk->first_minor) {
+		percent = READ_ONCE(stage7g_percent);
+		if (percent >= 50 && percent <= 100)
+			disksize = div_u64(((u64)totalram_pages << PAGE_SHIFT) *
+					   percent, 100);
+		else
+			percent = 0;
+	}
+#endif
 	disksize = PAGE_ALIGN(disksize);
 	if (!zram_meta_alloc(zram, disksize)) {
 		err = -ENOMEM;
@@ -1870,6 +1893,14 @@ static ssize_t disksize_store(struct device *dev,
 
 	zram->comp = comp;
 	zram->disksize = disksize;
+#ifdef CONFIG_TAB_S4_STAGE7A
+	if (!zram->disk->first_minor) {
+		WRITE_ONCE(stage7g_last_applied_percent, percent);
+		if (percent)
+			pr_info("Stage7G: initialized zram0 at %u%% (%llu bytes)\n",
+				percent, (unsigned long long)disksize);
+	}
+#endif
 	set_capacity(zram->disk, zram->disksize >> SECTOR_SHIFT);
 
 	revalidate_disk(zram->disk);
