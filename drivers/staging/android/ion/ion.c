@@ -17,6 +17,7 @@
  */
 
 #include <linux/atomic.h>
+#include <linux/ktime.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
@@ -198,8 +199,10 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	long nr_alloc_cur, nr_alloc_peak;
 
 	buffer = kzalloc(sizeof(struct ion_buffer), GFP_KERNEL);
-	if (!buffer)
+	if (!buffer) {
+		atomic64_inc(&heap->stage7h_failures);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	buffer->heap = heap;
 	buffer->flags = flags;
@@ -267,6 +270,9 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 		sg_dma_address(sg) = sg_phys(sg);
 		sg_dma_len(sg) = sg->length;
 	}
+	buffer->stage7h_birth_ns = ktime_get_ns();
+	atomic64_inc(&heap->stage7h_allocs);
+	atomic64_add(len, &heap->stage7h_alloc_bytes);
 	mutex_lock(&dev->buffer_lock);
 	ion_buffer_add(dev, buffer);
 	mutex_unlock(&dev->buffer_lock);
@@ -281,6 +287,7 @@ err:
 err1:
 	heap->ops->free(buffer);
 err2:
+	atomic64_inc(&heap->stage7h_failures);
 	kfree(buffer);
 	return ERR_PTR(ret);
 }
@@ -293,6 +300,16 @@ void ion_buffer_destroy(struct ion_buffer *buffer)
 
 	atomic_long_sub(buffer->size, &buffer->heap->total_allocated);
 	buffer->heap->ops->free(buffer);
+	if (buffer->stage7h_birth_ns) {
+		u64 age = ktime_get_ns() - buffer->stage7h_birth_ns;
+
+		atomic64_inc(&buffer->heap->stage7h_frees);
+		atomic64_add(buffer->size, &buffer->heap->stage7h_freed_bytes);
+		if (age >= NSEC_PER_SEC)
+			atomic64_inc(&buffer->heap->stage7h_free_ge1s);
+		if (age >= 30ULL * NSEC_PER_SEC)
+			atomic64_inc(&buffer->heap->stage7h_free_ge30s);
+	}
 	vfree(buffer->pages);
 	kfree(buffer);
 }
@@ -1993,6 +2010,15 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 				heap->free_list_size);
 	seq_puts(s, "----------------------------------------------------\n");
 
+	seq_printf(s, "stage7h allocs=%lld frees=%lld failures=%lld alloc_bytes=%lld freed_bytes=%lld free_ge1s=%lld free_ge30s=%lld\n",
+		(long long)atomic64_read(&heap->stage7h_allocs),
+		(long long)atomic64_read(&heap->stage7h_frees),
+		(long long)atomic64_read(&heap->stage7h_failures),
+		(long long)atomic64_read(&heap->stage7h_alloc_bytes),
+		(long long)atomic64_read(&heap->stage7h_freed_bytes),
+		(long long)atomic64_read(&heap->stage7h_free_ge1s),
+		(long long)atomic64_read(&heap->stage7h_free_ge30s));
+
 	if (heap->debug_show)
 		heap->debug_show(heap, s, unused);
 
@@ -2098,6 +2124,13 @@ void ion_device_add_heap(struct ion_device *dev, struct ion_heap *heap)
 
 	spin_lock_init(&heap->free_lock);
 	heap->free_list_size = 0;
+	atomic64_set(&heap->stage7h_allocs, 0);
+	atomic64_set(&heap->stage7h_frees, 0);
+	atomic64_set(&heap->stage7h_failures, 0);
+	atomic64_set(&heap->stage7h_alloc_bytes, 0);
+	atomic64_set(&heap->stage7h_freed_bytes, 0);
+	atomic64_set(&heap->stage7h_free_ge1s, 0);
+	atomic64_set(&heap->stage7h_free_ge30s, 0);
 
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_init_deferred_free(heap);
