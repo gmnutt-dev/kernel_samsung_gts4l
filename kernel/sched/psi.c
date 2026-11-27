@@ -196,6 +196,7 @@ static void group_init(struct psi_group *group)
 	/* Init trigger-related members */
 	atomic_set(&group->poll_scheduled, 0);
 	mutex_init(&group->trigger_lock);
+	mutex_init(&group->trigger_lifecycle_lock);
 	INIT_LIST_HEAD(&group->triggers);
 	memset(group->nr_triggers, 0, sizeof(group->nr_triggers));
 	group->poll_states = 0;
@@ -1082,6 +1083,7 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	atomic64_set(&t->stage7i_consumed, 0);
 	init_waitqueue_head(&t->event_wait);
 
+	mutex_lock(&group->trigger_lifecycle_lock);
 	mutex_lock(&group->trigger_lock);
 
 	if (!rcu_access_pointer(group->poll_kworker)) {
@@ -1094,6 +1096,7 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 		if (IS_ERR(kworker)) {
 			kfree(t);
 			mutex_unlock(&group->trigger_lock);
+			mutex_unlock(&group->trigger_lifecycle_lock);
 			return ERR_CAST(kworker);
 		}
 		sched_setscheduler_nocheck(kworker->task, SCHED_FIFO, &param);
@@ -1111,6 +1114,7 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 		atomic64_inc(&stage7i_created);
 
 	mutex_unlock(&group->trigger_lock);
+	mutex_unlock(&group->trigger_lifecycle_lock);
 
 	return t;
 }
@@ -1135,6 +1139,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	 */
 	wake_up_pollfree(&t->event_wait);
 
+	mutex_lock(&group->trigger_lifecycle_lock);
 	mutex_lock(&group->trigger_lock);
 
 	if (!list_empty(&t->node)) {
@@ -1186,6 +1191,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 
 		kthread_destroy_worker(kworker_to_destroy);
 	}
+	mutex_unlock(&group->trigger_lifecycle_lock);
 	kfree(t);
 }
 
@@ -1324,6 +1330,10 @@ static int stage7i_psi_show(struct seq_file *m, void *v)
 	struct psi_trigger *t;
 	unsigned int count = 0;
 
+	if (static_branch_likely(&psi_disabled)) {
+		seq_puts(m, "psi_disabled\n");
+		return 0;
+	}
 	seq_printf(m, "created=%lld destroyed=%lld signaled=%lld consumed=%lld coalesced=%lld create_failed=%lld\n",
 		   (long long)atomic64_read(&stage7i_created),
 		   (long long)atomic64_read(&stage7i_destroyed),
