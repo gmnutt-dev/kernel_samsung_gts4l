@@ -507,6 +507,20 @@ static void init_triggers(struct psi_group *group, u64 now)
 	group->polling_next_update = now + group->poll_min_period;
 }
 
+/* System-wide memory trigger lifecycle, not a claim about LMKD alone. */
+static atomic64_t stage7i_created = ATOMIC64_INIT(0);
+static atomic64_t stage7i_destroyed = ATOMIC64_INIT(0);
+static atomic64_t stage7i_signaled = ATOMIC64_INIT(0);
+static atomic64_t stage7i_consumed = ATOMIC64_INIT(0);
+static atomic64_t stage7i_coalesced = ATOMIC64_INIT(0);
+static atomic64_t stage7i_write_failed = ATOMIC64_INIT(0);
+
+static bool stage7i_mem_trigger(struct psi_trigger *t)
+{
+	return t->group == &psi_system &&
+		(t->state == PSI_MEM_SOME || t->state == PSI_MEM_FULL);
+}
+
 static u64 update_triggers(struct psi_group *group, u64 now)
 {
 	struct psi_trigger *t;
@@ -545,8 +559,12 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
+			if (stage7i_mem_trigger(t))
+				atomic64_inc(&stage7i_signaled);
 			trace_psi_update_trigger_wake_up(t, growth);
 			wake_up_interruptible(&t->event_wait);
+		} else if (stage7i_mem_trigger(t)) {
+			atomic64_inc(&stage7i_coalesced);
 		}
 		t->last_event_time = now;
 	}
@@ -1083,6 +1101,8 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 		div_u64(t->win.size, UPDATES_PER_WINDOW));
 	group->nr_triggers[t->state]++;
 	group->poll_states |= (1 << t->state);
+	if (stage7i_mem_trigger(t))
+		atomic64_inc(&stage7i_created);
 
 	mutex_unlock(&group->trigger_lock);
 
@@ -1116,6 +1136,8 @@ void psi_trigger_destroy(struct psi_trigger *t)
 		u64 period = ULLONG_MAX;
 
 		list_del(&t->node);
+		if (stage7i_mem_trigger(t))
+			atomic64_inc(&stage7i_destroyed);
 		group->nr_triggers[t->state]--;
 		if (!group->nr_triggers[t->state])
 			group->poll_states &= ~(1 << t->state);
@@ -1176,8 +1198,11 @@ unsigned int psi_trigger_poll(void **trigger_ptr, struct file *file,
 
 	poll_wait(file, &t->event_wait, wait);
 
-	if (cmpxchg(&t->event, 1, 0) == 1)
+	if (cmpxchg(&t->event, 1, 0) == 1) {
+		if (stage7i_mem_trigger(t))
+			atomic64_inc(&stage7i_consumed);
 		ret |= POLLPRI;
+	}
 
 	return ret;
 }
@@ -1185,22 +1210,21 @@ unsigned int psi_trigger_poll(void **trigger_ptr, struct file *file,
 static ssize_t psi_write(struct file *file, const char __user *user_buf,
 			 size_t nbytes, enum psi_res res)
 {
-	char buf[32];
-	size_t buf_size;
+	char buf[33];
 	struct seq_file *seq;
 	struct psi_trigger *new;
 
 	if (static_branch_likely(&psi_disabled))
 		return -EOPNOTSUPP;
 
-	if (!nbytes)
+	if (!nbytes || nbytes >= sizeof(buf))
 		return -EINVAL;
 
-	buf_size = min(nbytes, sizeof(buf));
-	if (copy_from_user(buf, user_buf, buf_size))
+	if (copy_from_user(buf, user_buf, nbytes))
 		return -EFAULT;
 
-	buf[buf_size - 1] = '\0';
+	/* Accept newline, NUL, or no terminator without losing a digit. */
+	buf[nbytes] = '\0';
 
 	seq = file->private_data;
 
@@ -1215,6 +1239,8 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 
 	new = psi_trigger_create(&psi_system, buf, nbytes, res);
 	if (IS_ERR(new)) {
+		if (res == PSI_MEM)
+			atomic64_inc(&stage7i_write_failed);
 		mutex_unlock(&seq->lock);
 		return PTR_ERR(new);
 	}
@@ -1285,12 +1311,35 @@ static const struct file_operations psi_cpu_fops = {
 	.release        = psi_fop_release,
 };
 
+static int stage7i_psi_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "created=%lld destroyed=%lld signaled=%lld consumed=%lld coalesced=%lld create_failed=%lld\n",
+		   (long long)atomic64_read(&stage7i_created),
+		   (long long)atomic64_read(&stage7i_destroyed),
+		   (long long)atomic64_read(&stage7i_signaled),
+		   (long long)atomic64_read(&stage7i_consumed),
+		   (long long)atomic64_read(&stage7i_coalesced),
+		   (long long)atomic64_read(&stage7i_write_failed));
+	return 0;
+}
+static int stage7i_psi_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, stage7i_psi_show, NULL);
+}
+static const struct file_operations stage7i_psi_fops = {
+	.open = stage7i_psi_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int __init psi_proc_init(void)
 {
 	proc_mkdir("pressure", NULL);
 	proc_create("pressure/io", 0, NULL, &psi_io_fops);
 	proc_create("pressure/memory", 0, NULL, &psi_memory_fops);
 	proc_create("pressure/cpu", 0, NULL, &psi_cpu_fops);
+	proc_create("tab_s4_stage7i_psi", 0400, NULL, &stage7i_psi_fops);
 	return 0;
 }
 module_init(psi_proc_init);
