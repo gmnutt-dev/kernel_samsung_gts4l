@@ -744,6 +744,7 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 	int ret = 0;
 	bool rollup_mode;
 	bool last_vma;
+	u64 pss_before;
 
 	if (priv->rollup) {
 		rollup_mode = true;
@@ -762,9 +763,10 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 	smaps_walk.private = mss;
 
 	/* mmap_sem is held in m_start */
+	pss_before = mss->pss;
 	walk_page_vma(vma, &smaps_walk);
 	if (vma->vm_flags & VM_LOCKED)
-		mss->pss_locked += mss->pss;
+		mss->pss_locked += mss->pss - pss_before;
 
 	if (!rollup_mode) {
 		show_map_vma(m, vma, is_pid);
@@ -822,7 +824,7 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 			   mss->private_hugetlb >> 10,
 			   mss->swap >> 10,
 			   (unsigned long)(mss->swap_pss >> (10 + PSS_SHIFT)),
-			   (unsigned long)(mss->pss >> (10 + PSS_SHIFT)));
+			   (unsigned long)(mss->pss_locked >> (10 + PSS_SHIFT)));
 
 	if (!rollup_mode) {
 		show_smap_vma_flags(m, vma);
