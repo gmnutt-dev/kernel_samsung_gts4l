@@ -71,6 +71,7 @@ struct ion_buffer *ion_handle_buffer(struct ion_handle *handle);
 */
 struct ion_buffer {
 	struct kref ref;
+	u64 stage7h_birth_ns;
 	union {
 		struct rb_node node;
 		struct list_head list;
@@ -203,6 +204,9 @@ struct ion_heap {
 	atomic_long_t total_allocated;
 	atomic_long_t total_allocated_peak;
 	atomic_long_t total_handles;
+	atomic64_t stage7h_allocs, stage7h_frees, stage7h_failures;
+	atomic64_t stage7h_alloc_bytes, stage7h_freed_bytes;
+	atomic64_t stage7h_free_ge1s, stage7h_free_ge30s;
 };
 
 /**
