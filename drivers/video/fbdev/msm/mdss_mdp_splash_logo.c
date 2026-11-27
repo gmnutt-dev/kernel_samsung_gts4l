@@ -22,6 +22,10 @@
 #include <linux/of_address.h>
 #include <linux/fb.h>
 #include <linux/dma-buf.h>
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/mm.h>
+#include <linux/mutex.h>
 
 #include "mdss_fb.h"
 #include "mdss_mdp.h"
@@ -256,6 +260,64 @@ void mdss_free_bootmem(u32 mem_addr, u32 size)
 		free_reserved_page(pfn_to_page(pfn_idx));
 }
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
+#ifdef CONFIG_TAB_S4_STAGE7A
+extern bool tab_s4_stage7a_camera_released;
+static bool stage7d_enabled;
+static unsigned int stage7d_released_pages;
+static DEFINE_MUTEX(stage7d_lock);
+module_param_named(stage7d_released_pages, stage7d_released_pages, uint, 0444);
+module_param_named(stage7d_enabled, stage7d_enabled, bool, 0400);
+static int __init stage7d_setup(char *arg)
+{
+	bool value;
+
+	if (arg && !kstrtobool(arg, &value))
+		stage7d_enabled = value;
+	return 0;
+}
+early_param("tab_s4_stage7d", stage7d_setup);
+#endif
+
+/* Called only at the driver's existing splash-release points. No late
+ * asynchronous release and no change to secure/debug carveouts. */
+static void stage7d_release_splash(u32 addr, u32 size, bool handoff_ok)
+{
+#ifdef CONFIG_TAB_S4_STAGE7A
+	unsigned long pfn, end;
+
+	if (stage7d_enabled && tab_s4_stage7a_camera_released &&
+	    addr == 0x9d600000 && size == 0x02400000) {
+		if (!handoff_ok)
+			return;
+		mutex_lock(&stage7d_lock);
+		if (stage7d_released_pages)
+			goto unlock;
+		if (!memblock_is_region_memory(addr, size) ||
+		    !memblock_is_region_reserved(addr, size))
+			goto unlock;
+		end = ((unsigned long)addr + size) >> PAGE_SHIFT;
+		for (pfn = addr >> PAGE_SHIFT; pfn < end; pfn++)
+			if (!pfn_valid(pfn) || !PageReserved(pfn_to_page(pfn)))
+				goto unlock;
+		if (memblock_free(addr, size))
+			goto unlock;
+		mdss_free_bootmem(addr, size);
+		stage7d_released_pages = size >> PAGE_SHIFT;
+		pr_info("Stage7D: released %u splash pages\n",
+			stage7d_released_pages);
+unlock:
+		mutex_unlock(&stage7d_lock);
+		return;
+	}
+#endif
+	if (!sec_debug_is_enabled()) {
+		memblock_free(addr, size);
+		mdss_free_bootmem(addr, size);
+	}
+}
+#endif
+
 int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 					bool use_borderfill)
 {
@@ -280,12 +342,8 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 			use_borderfill) {
 			mdss_mdp_splash_unmap_splash_mem(mfd);
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
-			if (!sec_debug_is_enabled()) {
-				memblock_free(mdp5_data->splash_mem_addr,
-						mdp5_data->splash_mem_size);
-				mdss_free_bootmem(mdp5_data->splash_mem_addr,
-						mdp5_data->splash_mem_size);
-			}
+			stage7d_release_splash(mdp5_data->splash_mem_addr,
+					mdp5_data->splash_mem_size, true);
 #else
 			memblock_free(mdp5_data->splash_mem_addr,
 					mdp5_data->splash_mem_size);
@@ -340,13 +398,8 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 	if (mdp5_data->splash_mem_addr &&
 	!mfd->splash_info.iommu_dynamic_attached) {
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
-		if (!sec_debug_is_enabled()) {
-			/* Give back the reserved memory to the system */
-			memblock_free(mdp5_data->splash_mem_addr,
-						mdp5_data->splash_mem_size);
-			mdss_free_bootmem(mdp5_data->splash_mem_addr,
-						mdp5_data->splash_mem_size);
-		}
+		stage7d_release_splash(mdp5_data->splash_mem_addr,
+				mdp5_data->splash_mem_size, !rc);
 #else
 		/* Give back the reserved memory to the system */
 		memblock_free(mdp5_data->splash_mem_addr,
@@ -734,12 +787,11 @@ error:
 		mdp5_mdata->splash_mem_addr) {
 		pr_debug("mem reservation not reqd if cont splash disabled\n");
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG) && defined(CONFIG_SEC_DEBUG)
-		if (!sec_debug_is_enabled()) {
-			memblock_free(mdp5_mdata->splash_mem_addr,
-						mdp5_mdata->splash_mem_size);
-			mdss_free_bootmem(mdp5_mdata->splash_mem_addr,
-						mdp5_mdata->splash_mem_size);
-		}
+		/* If continuous splash is disabled, preserve the original policy.
+		 * The experimental release requires the actual cleanup path. */
+		if (!sec_debug_is_enabled())
+			stage7d_release_splash(mdp5_mdata->splash_mem_addr,
+					mdp5_mdata->splash_mem_size, true);
 #else
 		memblock_free(mdp5_mdata->splash_mem_addr,
 					mdp5_mdata->splash_mem_size);
